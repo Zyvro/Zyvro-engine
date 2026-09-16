@@ -304,7 +304,11 @@ func TestSecretsRoundTrip(t *testing.T) {
 	if got := e.daemon.providerConfig().AnthropicAPIKey; got != key {
 		t.Errorf("providerConfig did not pick up the stored key (got %q)", got)
 	}
-	catalog := decode[[]providerInfo](t, mustStatus(t, e.do(http.MethodGet, "/api/providers", nil), http.StatusOK))
+	listing := decode[struct {
+		Providers []providerInfo      `json:"providers"`
+		Order     map[string][]string `json:"order"`
+	}](t, mustStatus(t, e.do(http.MethodGet, "/api/providers", nil), http.StatusOK))
+	catalog := listing.Providers
 	for _, p := range catalog {
 		if p.ID == "anthropic" && (!p.HasUserKey || p.UserKeyLast4 != "9876") {
 			t.Errorf("catalog did not reflect the stored key: %+v", p)
@@ -523,7 +527,13 @@ func TestContentServesMedia(t *testing.T) {
 
 func TestProvidersCatalogShape(t *testing.T) {
 	e := newTestEnv(t)
-	catalog := decode[[]providerInfo](t, mustStatus(t, e.do(http.MethodGet, "/api/providers", nil), http.StatusOK))
+	// The listing carries the project's own order beside the catalogue, so the
+	// panel can show the list the way runs will actually use it.
+	listing := decode[struct {
+		Providers []providerInfo      `json:"providers"`
+		Order     map[string][]string `json:"order"`
+	}](t, mustStatus(t, e.do(http.MethodGet, "/api/providers", nil), http.StatusOK))
+	catalog := listing.Providers
 
 	byID := map[string]providerInfo{}
 	for _, p := range catalog {
@@ -531,8 +541,16 @@ func TestProvidersCatalogShape(t *testing.T) {
 		if p.Label == "" || p.Purpose == "" {
 			t.Errorf("provider %s is missing display text: %+v", p.ID, p)
 		}
-		if p.Role != "text" && p.Role != "image" {
-			t.Errorf("provider %s has role %q", p.ID, p.Role)
+		// A provider does more than one job: Gemini generates images and reads
+		// them, Ollama writes text and reads images. A provider with no job at
+		// all would be one the panel shows and nothing can use.
+		if len(p.Roles) == 0 {
+			t.Errorf("provider %s has no role", p.ID)
+		}
+		for _, role := range p.Roles {
+			if role != "text" && role != "image" && role != "vision" {
+				t.Errorf("provider %s has role %q", p.ID, role)
+			}
 		}
 	}
 	for _, want := range []string{"google", "anthropic", "openai", "ollama", "claude-cli", "codex-cli"} {
@@ -540,6 +558,32 @@ func TestProvidersCatalogShape(t *testing.T) {
 			t.Errorf("catalog is missing %q", want)
 		}
 	}
+	// The three jobs are genuinely different, and the catalogue has to say so.
+	// Folding vision into image was what told somebody holding an Ollama key
+	// they needed a Google one to read a screenshot.
+	covers := func(id, role string) bool {
+		for _, r := range byID[id].Roles {
+			if r == role {
+				return true
+			}
+		}
+		return false
+	}
+	if !covers("google", "image") || !covers("google", "vision") {
+		t.Error("Google does both image generation and vision, and the catalogue should say so")
+	}
+	if !covers("ollama", "text") || !covers("ollama", "vision") {
+		t.Error("Ollama writes text and reads images, and lost one of those")
+	}
+	if covers("ollama", "image") {
+		t.Error("Ollama was listed for image generation, which it cannot do")
+	}
+	for _, id := range []string{"claude-cli", "codex-cli"} {
+		if covers(id, "vision") || covers(id, "image") {
+			t.Errorf("%s was listed for a job it cannot do: %v", id, byID[id].Roles)
+		}
+	}
+
 	// The CLI providers are configured by being installed, so they carry no
 	// key material to leak.
 	for _, id := range []string{"claude-cli", "codex-cli"} {
@@ -818,5 +862,53 @@ func TestLocalStatusAdvertisesTheFileNodes(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Fatalf("local_nodes = %v, missing %v", status.LocalNodes, want)
+	}
+}
+
+// The order this project wants its providers tried in.
+//
+// The daemon is the engine, so what it accepts here decides where a run goes.
+// A list naming a provider for a job it cannot do — Black Forest Labs for
+// vision — would send every such call to a backend that cannot answer, and
+// nothing in the failure would say the ordering was the reason.
+func TestProviderOrderIsCleanedAndKept(t *testing.T) {
+	e := newTestEnv(t)
+
+	read := func() map[string][]string {
+		listing := decode[struct {
+			Order map[string][]string `json:"order"`
+		}](t, mustStatus(t, e.do(http.MethodGet, "/api/providers", nil), http.StatusOK))
+		return listing.Order
+	}
+
+	if got := read(); len(got) != 0 {
+		t.Fatalf("a fresh project already had an order: %v", got)
+	}
+
+	saved := decode[struct {
+		Order map[string][]string `json:"order"`
+	}](t, mustStatus(t, e.do(http.MethodPut, "/api/providers/order", map[string]any{
+		"order": map[string][]string{
+			"vision":   {"ollama", "google"},
+			"text":     {"claude-cli", "ollama"},
+			"image":    {"ollama", "google"}, // ollama cannot generate
+			"nonsense": {"google"},           // not a job
+		},
+	}), http.StatusOK))
+
+	if strings.Join(saved.Order["vision"], ",") != "ollama,google" {
+		t.Errorf("a legitimate vision order was altered: %v", saved.Order["vision"])
+	}
+	if strings.Join(saved.Order["image"], ",") != "google" {
+		t.Errorf("Ollama was kept for image generation: %v", saved.Order["image"])
+	}
+	if _, ok := saved.Order["nonsense"]; ok {
+		t.Error("a job that does not exist was kept")
+	}
+
+	// And it survives, because it is written to the project rather than held in
+	// memory: a daemon restarts every time the app opens the folder again.
+	if got := read(); strings.Join(got["vision"], ",") != "ollama,google" {
+		t.Fatalf("the order did not come back: %v", got)
 	}
 }

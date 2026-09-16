@@ -272,6 +272,7 @@ func (d *daemon) handler() http.Handler {
 	api.HandleFunc("GET /api/workflows/{id}/executions", d.listWorkflowExecutions)
 	api.HandleFunc("GET /api/workflows/{id}/executions/last", d.getLastExecution)
 	api.HandleFunc("GET /api/providers", d.listProviders)
+	api.HandleFunc("PUT /api/providers/order", d.setProviderOrder)
 	api.HandleFunc("GET /api/secrets", d.listSecrets)
 	api.HandleFunc("PUT /api/secrets", d.setSecret)
 	api.HandleFunc("DELETE /api/secrets/{provider}", d.deleteSecret)
@@ -874,9 +875,17 @@ type providerInfo struct {
 	PlatformKey  bool   `json:"platform_key"`
 	UserKeyLast4 string `json:"user_key_last4"`
 	HasUserKey   bool   `json:"has_user_key"`
-	Role         string `json:"role"`
-	IsDefault    bool   `json:"is_default"`
-	Required     bool   `json:"required"`
+	// Roles are the jobs this provider can do. A list, because a provider does
+	// more than one: Gemini generates images and reads them, Ollama writes text
+	// and reads images. It was a single role, which forced image and vision
+	// under one heading and told somebody holding an Ollama key they needed a
+	// Google one to read a screenshot.
+	//
+	// Derived from the engine's own sets rather than written out here: this
+	// daemon *is* the engine, so a copy would be a copy of itself.
+	Roles     []string `json:"roles"`
+	IsDefault bool     `json:"is_default"`
+	Required  bool     `json:"required"`
 }
 
 // localCatalog describes every provider the desktop app can use, in the
@@ -898,7 +907,6 @@ func (d *daemon) localCatalog() []providerInfo {
 	catalog := []providerInfo{
 		{
 			ID:         "google",
-			Role:       "image",
 			Label:      "Google AI Studio",
 			Purpose:    "Image generation, image editing and vision (Gemini).",
 			KeyHint:    "AIza…",
@@ -907,7 +915,6 @@ func (d *daemon) localCatalog() []providerInfo {
 		},
 		{
 			ID:         "anthropic",
-			Role:       "text",
 			Label:      "Claude (Anthropic)",
 			Purpose:    "Text generation and the Brain agent, on Claude models.",
 			KeyHint:    "sk-ant-api… or a token from claude setup-token",
@@ -916,7 +923,6 @@ func (d *daemon) localCatalog() []providerInfo {
 		},
 		{
 			ID:         "openai",
-			Role:       "text",
 			Label:      "OpenAI (ChatGPT / Codex)",
 			Purpose:    "Text generation and the Brain agent, on GPT models.",
 			KeyHint:    "sk-…",
@@ -925,7 +931,6 @@ func (d *daemon) localCatalog() []providerInfo {
 		},
 		{
 			ID:         "ollama",
-			Role:       "text",
 			Label:      "Ollama Cloud",
 			Purpose:    "Text generation and the Brain agent, on open models.",
 			KeyHint:    "Ollama API key",
@@ -934,7 +939,6 @@ func (d *daemon) localCatalog() []providerInfo {
 		},
 		{
 			ID:         "claude-cli",
-			Role:       "text",
 			Label:      "Claude Code (local CLI)",
 			Purpose:    "Text generation and the Brain agent through the claude binary already signed in on this machine.",
 			ConsoleURL: "https://claude.com/claude-code",
@@ -942,7 +946,6 @@ func (d *daemon) localCatalog() []providerInfo {
 		},
 		{
 			ID:         "codex-cli",
-			Role:       "text",
 			Label:      "Codex (local CLI)",
 			Purpose:    "Text generation and the Brain agent through the codex binary already signed in on this machine.",
 			ConsoleURL: "https://developers.openai.com/codex/cli",
@@ -950,7 +953,8 @@ func (d *daemon) localCatalog() []providerInfo {
 		},
 	}
 
-	hasText := false
+	// Which jobs are covered by something the run can actually use.
+	covered := map[string]bool{}
 	for i := range catalog {
 		id := catalog[i].ID
 		eff := effectiveCredential(cfg, id)
@@ -964,21 +968,59 @@ func (d *daemon) localCatalog() []providerInfo {
 			catalog[i].UserKeyLast4 = last4(stored[id])
 			catalog[i].PlatformKey = eff != "" && stored[id] == ""
 		}
-		if catalog[i].Role == "text" && eff != "" {
-			hasText = true
+		catalog[i].Roles = localRolesOf(id)
+		if eff != "" {
+			for _, role := range catalog[i].Roles {
+				covered[role] = true
+			}
 		}
 	}
 	for i := range catalog {
-		catalog[i].IsDefault = catalog[i].Role == "text" && catalog[i].ID == cfg.TextProvider
-		// The text providers are alternatives, so holding any one of them
-		// satisfies all of them; the image provider stands alone.
-		if catalog[i].Role == "text" {
-			catalog[i].Required = !hasText
-		} else {
-			catalog[i].Required = effectiveCredential(cfg, catalog[i].ID) == ""
+		catalog[i].IsDefault = hasRole(catalog[i].Roles, "text") && catalog[i].ID == cfg.TextProvider
+		// Providers of one job are alternatives, so holding any of them
+		// satisfies that job. A provider is still needed when one of the jobs
+		// it could do is covered by nothing else — which is why this asks about
+		// each of its jobs rather than about the provider.
+		catalog[i].Required = false
+		for _, role := range catalog[i].Roles {
+			if !covered[role] {
+				catalog[i].Required = true
+			}
 		}
 	}
 	return catalog
+}
+
+// localRolesOf asks the engine which jobs a provider can do. The CLI providers
+// are text only: they drive a command line tool that writes, and neither of
+// them takes an image.
+func localRolesOf(id string) []string {
+	var roles []string
+	for _, role := range []struct {
+		name string
+		list []string
+	}{
+		{"text", providers.TextProviders},
+		{"image", providers.ImageProviders},
+		{"vision", providers.VisionProviders},
+	} {
+		for _, candidate := range role.list {
+			if candidate == id {
+				roles = append(roles, role.name)
+				break
+			}
+		}
+	}
+	return roles
+}
+
+func hasRole(roles []string, role string) bool {
+	for _, r := range roles {
+		if r == role {
+			return true
+		}
+	}
+	return false
 }
 
 // effectiveCredential is what a provider would actually run with, after
@@ -1014,7 +1056,56 @@ func last4(secret string) string {
 }
 
 func (d *daemon) listProviders(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, d.localCatalog())
+	// The project's own order travels with the catalogue, so the panel can show
+	// the list the way runs will actually use it rather than in whatever order
+	// this file happens to declare them.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"providers": d.localCatalog(),
+		"order":     d.store.ProviderOrder(),
+	})
+}
+
+// setProviderOrder records which provider this project wants tried first for a
+// job. Only ids this engine can actually drive, for a job they can actually do:
+// a list naming Black Forest Labs for vision would send every such call to a
+// backend that cannot answer, and nothing would say why.
+func (d *daemon) setProviderOrder(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Order map[string][]string `json:"order"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+
+	known := map[string][]string{}
+	for _, p := range d.localCatalog() {
+		known[p.ID] = p.Roles
+	}
+	clean := map[string][]string{}
+	for role, ids := range req.Order {
+		if role != "text" && role != "image" && role != "vision" {
+			continue
+		}
+		seen := map[string]bool{}
+		var kept []string
+		for _, id := range ids {
+			roles, ok := known[id]
+			if !ok || seen[id] || !hasRole(roles, role) {
+				continue
+			}
+			seen[id] = true
+			kept = append(kept, id)
+		}
+		if len(kept) > 0 {
+			clean[role] = kept
+		}
+	}
+
+	if err := d.store.SetProviderOrder(clean); err != nil {
+		writeErr(w, http.StatusInternalServerError, "failed to save the order")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"order": clean})
 }
 
 // knownProvider guards the secrets file against entries no run would ever read.
