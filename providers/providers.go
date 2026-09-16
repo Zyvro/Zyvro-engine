@@ -238,7 +238,14 @@ type ollamaChatResponse struct {
 			Content   string     `json:"content"`
 			ToolCalls []ToolCall `json:"tool_calls"`
 		} `json:"message"`
+		// FinishReason is why the model stopped. "length" means it hit the cap,
+		// which is the one case where an empty answer has an explanation worth
+		// passing on.
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+	Usage struct {
+		CompletionTokens int `json:"completion_tokens"`
+	} `json:"usage"`
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error"`
@@ -287,9 +294,13 @@ func (c *Config) ollamaComplete(ctx context.Context, req LLMRequest) (*LLMRespon
 	if len(parsed.Choices) == 0 {
 		return nil, fmt.Errorf("empty LLM response")
 	}
+	choice := parsed.Choices[0]
+	if err := emptyCompletion(choice.Message.Content, len(choice.Message.ToolCalls), choice.FinishReason, parsed.Usage.CompletionTokens, req.MaxTokens); err != nil {
+		return nil, err
+	}
 	return &LLMResponse{
-		Content:   parsed.Choices[0].Message.Content,
-		ToolCalls: parsed.Choices[0].Message.ToolCalls,
+		Content:   choice.Message.Content,
+		ToolCalls: choice.Message.ToolCalls,
 	}, nil
 }
 
@@ -505,4 +516,46 @@ func (c *Config) GeminiText(ctx context.Context, model, system, user string) (st
 		}
 	}
 	return strings.TrimSpace(sb.String()), nil
+}
+
+// emptyCompletion turns a model that answered with nothing into an error that
+// says why.
+//
+// A reasoning model spends tokens thinking before it writes, and the cap covers
+// both. Ask it for a sentence within two hundred tokens and it can use every
+// one of them reasoning and emit no content at all — a response the provider
+// reports as a success, with finish_reason "length" and an empty string.
+//
+// Returning that empty string as a result is the worst of the options. The node
+// reports success, the emptiness travels downstream, and the run fails three
+// nodes later on something like "generate image needs a prompt" — which sends
+// whoever is reading it to look at the wrong node. Failing here says which node
+// failed, and the one thing that fixes it.
+//
+// Tool calls are an answer: a model that called a tool and wrote no prose did
+// exactly what it was asked to.
+func emptyCompletion(content string, toolCalls int, finishReason string, completionTokens, maxTokens int) error {
+	if strings.TrimSpace(content) != "" || toolCalls > 0 {
+		return nil
+	}
+	if finishReason == "length" {
+		budget := "its token budget"
+		if maxTokens > 0 {
+			budget = fmt.Sprintf("its budget of %d tokens", maxTokens)
+		}
+		spent := ""
+		if completionTokens > 0 {
+			spent = fmt.Sprintf(" (it spent %d)", completionTokens)
+		}
+		return &ProviderError{
+			Code: "empty_completion",
+			Message: fmt.Sprintf(
+				"the model used %s before writing anything%s. Raise Max tokens on this node, or pick a model that does not reason before answering",
+				budget, spent),
+		}
+	}
+	return &ProviderError{
+		Code:    "empty_completion",
+		Message: "the model returned no text",
+	}
 }

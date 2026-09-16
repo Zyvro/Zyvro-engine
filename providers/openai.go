@@ -63,8 +63,12 @@ func (c *Config) openAIComplete(ctx context.Context, req LLMRequest) (*LLMRespon
 	if len(parsed.Choices) == 0 {
 		return nil, fmt.Errorf("empty OpenAI response")
 	}
+	choice := parsed.Choices[0]
+	if err := emptyCompletion(choice.Message.Content, len(choice.Message.ToolCalls), choice.FinishReason, parsed.Usage.CompletionTokens, req.MaxTokens); err != nil {
+		return nil, err
+	}
 	return &LLMResponse{
-		Content:   parsed.Choices[0].Message.Content,
-		ToolCalls: parsed.Choices[0].Message.ToolCalls,
+		Content:   choice.Message.Content,
+		ToolCalls: choice.Message.ToolCalls,
 	}, nil
 }

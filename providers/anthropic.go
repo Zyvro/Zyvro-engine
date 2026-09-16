@@ -79,7 +79,10 @@ type anthropicResponse struct {
 	Content    []anthropicBlock `json:"content"`
 	StopReason string           `json:"stop_reason"`
 	Model      string           `json:"model"`
-	Error      *struct {
+	Usage      struct {
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
+	Error *struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error"`
@@ -228,5 +231,15 @@ func (c *Config) anthropicComplete(ctx context.Context, req LLMRequest) (*LLMRes
 		}
 	}
 	out.Content = strings.TrimSpace(strings.Join(texts, "\n"))
+	// Anthropic says "max_tokens" where the OpenAI-shaped providers say
+	// "length". Same situation, same answer, so it is translated here rather
+	// than taught to the shared check.
+	reason := parsed.StopReason
+	if reason == "max_tokens" {
+		reason = "length"
+	}
+	if err := emptyCompletion(out.Content, len(out.ToolCalls), reason, parsed.Usage.OutputTokens, req.MaxTokens); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
