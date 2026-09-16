@@ -22,7 +22,6 @@ go get github.com/Zyvro/Zyvro-engine
 | `localstore` | A filesystem-backed workflow store, for running against a project folder |
 | `mcp` | The JSON-RPC surface and tool catalogue both Zyvro MCP servers serve |
 | `cmd/zyvrod` | The local daemon: one project folder, no accounts, no database |
-| `cmd/zyvrel` | Signs engine releases |
 
 ## Running a workflow on a subscription, not an API key
 
