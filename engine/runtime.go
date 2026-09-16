@@ -789,8 +789,20 @@ func (r *Runtime) runVision(ctx context.Context, in *RunInput) (*NodeOutput, err
 	if len(images) == 0 {
 		return nil, fmt.Errorf("vision node needs at least one image")
 	}
-	model := strDefault(in.Config["model"], r.visionModel())
-	resp, err := r.Providers.GeminiVision(ctx, model, instruction, images, mimes)
+	// The provider is the node's choice, or whichever credential the run
+	// actually carries. It used to be Gemini and nothing else, which meant an
+	// account holding an Ollama key — or a run on the free allowance, which
+	// lends exactly that — was told to go and get a Google key for a job its
+	// own credential could do. Most models Ollama serves today are
+	// vision-capable.
+	provider := str(in.Config["provider"])
+	model := str(in.Config["model"])
+	if model == "" && r.Providers != nil && r.Providers.ResolvedVisionProvider(provider) == "google" {
+		// Only Gemini gets the Gemini default. Handing that name to Ollama
+		// would be handing it a name nobody there has heard of.
+		model = r.visionModel()
+	}
+	resp, err := r.Providers.VisionAsk(ctx, provider, model, instruction, images, mimes)
 	if err != nil {
 		return nil, fmt.Errorf("vision call failed: %w", err)
 	}

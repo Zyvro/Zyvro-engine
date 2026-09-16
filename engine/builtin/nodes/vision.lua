@@ -12,11 +12,19 @@ return {
   outputs = { "text" },
   config = {
     { key = "instruction", label = "Instruction", type = "textarea", default = "" },
+    -- Vision was Gemini's alone, which told anyone holding an Ollama key to go
+    -- and get a Google one for a job their own credential could do. Most models
+    -- Ollama serves today are vision-capable. Empty means "whichever key this
+    -- run actually carries", which is also what makes the free allowance work.
+    { key = "provider", label = "Provider", type = "select", default = "",
+      options = { "", "google", "ollama", "openai" } },
+    { key = "model", label = "Model", type = "text", default = "" },
   },
 
   run = function(ctx)
     return ctx.vision{
       instruction = ctx.config.instruction,
+      provider = ctx.config.provider,
       model = ctx.config.model,
       jsonOutput = ctx.config.jsonOutput,
     }
