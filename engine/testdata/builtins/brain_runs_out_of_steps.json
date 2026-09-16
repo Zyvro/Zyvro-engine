@@ -1,0 +1,40 @@
+{
+  "outputs": {
+    "B": {
+      "type": "text",
+      "value": {
+        "text": "Agent stopped after reaching the maximum number of steps.",
+        "trace": [
+          {
+            "step": 1,
+            "tool": "llm",
+            "summary": "think",
+            "status": "success"
+          }
+        ]
+      }
+    },
+    "P": {
+      "type": "text",
+      "value": {
+        "text": "Agent stopped after reaching the maximum number of steps.",
+        "trace": [
+          {
+            "step": 1,
+            "tool": "llm",
+            "summary": "think",
+            "status": "success"
+          }
+        ]
+      }
+    }
+  },
+  "trace": [
+    {
+      "step": 1,
+      "tool": "llm",
+      "summary": "think",
+      "status": "success"
+    }
+  ]
+}

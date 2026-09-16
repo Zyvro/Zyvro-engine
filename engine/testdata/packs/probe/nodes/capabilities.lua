@@ -12,8 +12,18 @@ return {
     return {
       data = {
         llm = ctx.llm ~= nil,
+        complete = ctx.complete ~= nil,
         readFile = ctx.readFile ~= nil,
         writeFile = ctx.writeFile ~= nil,
+        generateImage = ctx.generateImage ~= nil,
+        editImage = ctx.editImage ~= nil,
+        removeBackground = ctx.removeBackground ~= nil,
+        rotateImage = ctx.rotateImage ~= nil,
+        flipImage = ctx.flipImage ~= nil,
+        composeImages = ctx.composeImages ~= nil,
+        vision = ctx.vision ~= nil,
+        brain = ctx.brain ~= nil,
+        agentTools = ctx.agentTools ~= nil,
       },
     }
   end,

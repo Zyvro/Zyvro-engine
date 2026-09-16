@@ -3,9 +3,11 @@ package plugins
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
-	"path/filepath"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -46,40 +48,47 @@ var (
 // an error rather than something ignored: a manifest asking for "network" must
 // fail loudly today, so that adding that capability tomorrow cannot silently
 // grant it to a pack installed before it existed.
+//
+// They are separate rather than one "ai" capability because they are separate
+// decisions. Someone installing a pack is being asked to agree to something
+// specific, and "this pack may describe images to a model" and "this pack may
+// run an agent loop against your account" are not the same sentence. A pack
+// that only needs one must not have to ask for both.
 const (
-	CapLLM   = "llm"
+	// CapLLM is one text completion at a time, through the host's own provider.
+	CapLLM = "llm"
+	// CapFiles is the project folder the user already opened.
 	CapFiles = "files"
+	// CapImage is the host making an image on the node's behalf: generating
+	// one, editing one, removing a background, turning or mirroring one, or
+	// composing several into a preview. None of that work happens in Lua — the
+	// capability is permission to ask the host to do it.
+	CapImage = "image"
+	// CapVision is sending images to a model and getting words back.
+	CapVision = "vision"
+	// CapAgent is the Brain: a loop that calls the model repeatedly and
+	// executes other nodes of the graph as tools. It is the widest of the five,
+	// because a Brain reaches nodes this one is not.
+	CapAgent = "agent"
 )
 
-var knownCapabilities = []string{CapLLM, CapFiles}
+var knownCapabilities = []string{CapLLM, CapFiles, CapImage, CapVision, CapAgent}
 
-// builtinNodeTypes mirrors the cases of engine.Runtime.executeWithInput.
+// A note on reserved node types, which used to live here as a list.
 //
-// It is duplicated rather than imported because plugins must not import engine
-// — engine imports this package, and a cycle would follow. The duplication is
-// the price of that, and it has to be kept in step: a built-in added to the
-// engine without being added here is a built-in a pack can shadow, and
-// shadowing "llm" would be a very good attack.
-var builtinNodeTypes = []string{
-	"brain",
-	"editImage",
-	"fileInput",
-	"fileOutput",
-	"flipImage",
-	"generateImage",
-	"generateVideo",
-	"imageInput",
-	"llm",
-	"mergeText",
-	"output",
-	"preview",
-	"removeBackground",
-	"rotateImage",
-	"textInput",
-	"vision",
-	"voxelPreview",
-	"zyvroTools",
-}
+// It was a copy of the engine's switch statement, kept in step by a test that
+// read both files as Go syntax, and it existed because plugins must not import
+// engine. That is still true, so the names still have to arrive from outside —
+// but a list is not the only way to be told. They are now passed in: Load takes
+// them, NewRegistry takes them, and the engine, which is the only thing that
+// knows what it can run, is the one that says. One list, in the package that
+// owns it.
+//
+// Nothing is lost by the inversion. A name a pack may not take is still refused
+// twice, at load and again at install, for the same reason as before: a
+// built-in added after a pack shipped would otherwise be shadowed by a pack
+// that loaded cleanly last week, and shadowing "llm" would be a very good
+// attack.
 
 // portTypes are the values a node's inputs and outputs may name. They mirror
 // the engine's NodeOutput.Type, plus "any" for a node that does not care.
@@ -119,6 +128,11 @@ type NodeDef struct {
 	Inputs      []string      `json:"inputs"`
 	Outputs     []string      `json:"outputs"`
 	Config      []ConfigField `json:"config"`
+
+	// ToolOnly marks a node with no data ports at all, which exists only to be
+	// bound to a Brain through a tool edge. The palette draws it without
+	// handles, and the DAG loop never reaches it.
+	ToolOnly bool `json:"toolOnly,omitempty"`
 
 	// Pack and Capabilities travel with the definition because they decide what
 	// its ctx is allowed to carry. A node cannot be run without knowing which
@@ -172,33 +186,58 @@ type Pack struct {
 // Load reads a pack directory, validates its manifest, and evaluates each node
 // file to collect its definition.
 //
+// reserved are the node types the host already implements and a pack therefore
+// may not define. They are a parameter rather than a list in this file because
+// this package cannot import the one that knows them; a nil slice reserves
+// nothing, which is what the host's own bundled pack is loaded with.
+//
 // The evaluation happens in the same sandbox a run gets, with a shorter
 // deadline. That is the point rather than an economy: returning a table is not
 // work, so a chunk that needs a looser sandbox to produce its definition is
 // doing something at load time that it should not be able to do at all.
-func Load(dir string) (*Pack, error) {
-	manifest, err := readManifest(dir)
+func Load(dir string, reserved []string) (*Pack, error) {
+	// os.DirFS rather than the paths directly, so that this and LoadFS are one
+	// implementation. A pack read from an embedded filesystem has to be loaded
+	// by exactly the code that loads one from disk, or the bundled pack would
+	// be validated by something other than the validator.
+	return loadFS(os.DirFS(dir), ".", dir, reserved)
+}
+
+// LoadFS is Load against any filesystem, which is how a pack compiled into the
+// binary is read. root is the directory inside fsys that holds the manifest.
+func LoadFS(fsys fs.FS, root string, reserved []string) (*Pack, error) {
+	if root == "" {
+		root = "."
+	}
+	return loadFS(fsys, root, root, reserved)
+}
+
+// loadFS is the whole of both. label is what error messages call the pack's
+// location, which for a directory on disk is the path the user typed and for an
+// embedded pack is the name it has inside the binary.
+func loadFS(fsys fs.FS, root, label string, reserved []string) (*Pack, error) {
+	manifest, err := readManifest(fsys, root, label)
 	if err != nil {
 		return nil, err
 	}
 
-	files, err := nodeFiles(dir)
+	files, err := nodeFiles(fsys, root, label)
 	if err != nil {
 		return nil, err
 	}
 
-	pack := &Pack{Dir: dir, Manifest: *manifest}
+	pack := &Pack{Dir: label, Manifest: *manifest}
 	seen := map[string]string{}
-	for _, path := range files {
-		def, err := loadNodeFile(path, manifest)
+	for _, file := range files {
+		def, err := loadNodeFile(fsys, file, manifest, reserved)
 		if err != nil {
 			return nil, err
 		}
 		if other, dup := seen[def.Type]; dup {
 			return nil, fmt.Errorf("%s: node type %q is already defined by %s",
-				filepath.Base(path), def.Type, filepath.Base(other))
+				path.Base(file), def.Type, path.Base(other))
 		}
-		seen[def.Type] = path
+		seen[def.Type] = file
 		pack.Nodes = append(pack.Nodes, def)
 	}
 	if len(pack.Nodes) == 0 {
@@ -207,15 +246,14 @@ func Load(dir string) (*Pack, error) {
 	return pack, nil
 }
 
-func readManifest(dir string) (*Manifest, error) {
-	path := filepath.Join(dir, manifestName)
-	data, err := os.ReadFile(path)
+func readManifest(fsys fs.FS, root, label string) (*Manifest, error) {
+	data, err := fs.ReadFile(fsys, path.Join(root, manifestName))
 	if err != nil {
-		if os.IsNotExist(err) {
-			if _, altErr := os.Stat(filepath.Join(dir, altManifestName)); altErr == nil {
-				return nil, fmt.Errorf("%s: this pack has a %s, but Zyvro reads %s", dir, altManifestName, manifestName)
+		if errors.Is(err, fs.ErrNotExist) {
+			if _, altErr := fs.Stat(fsys, path.Join(root, altManifestName)); altErr == nil {
+				return nil, fmt.Errorf("%s: this pack has a %s, but Zyvro reads %s", label, altManifestName, manifestName)
 			}
-			return nil, fmt.Errorf("%s: no %s in this directory", dir, manifestName)
+			return nil, fmt.Errorf("%s: no %s in this directory", label, manifestName)
 		}
 		return nil, err
 	}
@@ -239,17 +277,18 @@ func readManifest(dir string) (*Manifest, error) {
 	for _, c := range m.Capabilities {
 		if !contains(knownCapabilities, c) {
 			return nil, fmt.Errorf("%s: unknown capability %q: a pack may declare %s",
-				manifestName, c, strings.Join(knownCapabilities, " or "))
+				manifestName, c, strings.Join(knownCapabilities, ", "))
 		}
 	}
 	return &m, nil
 }
 
-func nodeFiles(dir string) ([]string, error) {
-	entries, err := os.ReadDir(filepath.Join(dir, nodesDir))
+func nodeFiles(fsys fs.FS, root, label string) ([]string, error) {
+	dir := path.Join(root, nodesDir)
+	entries, err := fs.ReadDir(fsys, dir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("%s: no %s/ directory", dir, nodesDir)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("%s: no %s/ directory", label, nodesDir)
 		}
 		return nil, err
 	}
@@ -260,10 +299,10 @@ func nodeFiles(dir string) ([]string, error) {
 		if e.IsDir() || !e.Type().IsRegular() || !strings.HasSuffix(e.Name(), ".lua") {
 			continue
 		}
-		files = append(files, filepath.Join(dir, nodesDir, e.Name()))
+		files = append(files, path.Join(dir, e.Name()))
 	}
 	if len(files) > maxNodesPerPack {
-		return nil, fmt.Errorf("%s: %d node files, over the limit of %d for one pack", dir, len(files), maxNodesPerPack)
+		return nil, fmt.Errorf("%s: %d node files, over the limit of %d for one pack", label, len(files), maxNodesPerPack)
 	}
 	// Sorted, so a pack always loads in the same order and an error in it is
 	// always reported against the same file.
@@ -271,16 +310,16 @@ func nodeFiles(dir string) ([]string, error) {
 	return files, nil
 }
 
-func loadNodeFile(path string, m *Manifest) (*NodeDef, error) {
-	name := filepath.Base(path)
-	info, err := os.Stat(path)
+func loadNodeFile(fsys fs.FS, file string, m *Manifest, reserved []string) (*NodeDef, error) {
+	name := path.Base(file)
+	info, err := fs.Stat(fsys, file)
 	if err != nil {
 		return nil, err
 	}
 	if info.Size() > maxNodeSourceBytes {
 		return nil, fmt.Errorf("%s is %d bytes, over the limit of %d for one node file", name, info.Size(), maxNodeSourceBytes)
 	}
-	src, err := os.ReadFile(path)
+	src, err := fs.ReadFile(fsys, file)
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +329,7 @@ func loadNodeFile(path string, m *Manifest) (*NodeDef, error) {
 	}
 
 	def, _, err := sandboxRun(context.Background(), loadLimits(), func(L *lua.LState) (*NodeDef, error) {
-		return evalDefinition(L, name, proto)
+		return evalDefinition(L, name, proto, reserved)
 	})
 	if err != nil {
 		return nil, err
@@ -304,7 +343,7 @@ func loadNodeFile(path string, m *Manifest) (*NodeDef, error) {
 }
 
 // evalDefinition runs a node chunk and reads the table it returns.
-func evalDefinition(L *lua.LState, name string, proto *lua.FunctionProto) (*NodeDef, error) {
+func evalDefinition(L *lua.LState, name string, proto *lua.FunctionProto, reserved []string) (*NodeDef, error) {
 	// Not wrapped with the file name: a Lua runtime error already carries the
 	// chunk name and the line, and prefixing it again reads as two files.
 	if err := L.CallByParam(lua.P{Fn: L.NewFunctionFromProto(proto), NRet: 1, Protect: true}); err != nil {
@@ -316,14 +355,14 @@ func evalDefinition(L *lua.LState, name string, proto *lua.FunctionProto) (*Node
 	if !ok {
 		return nil, fmt.Errorf("%s must end with `return { ... }` describing the node, but returned %s", name, ret.Type().String())
 	}
-	def, err := readDefinition(tbl)
+	def, err := readDefinition(tbl, reserved)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	return def, nil
 }
 
-func readDefinition(tbl *lua.LTable) (*NodeDef, error) {
+func readDefinition(tbl *lua.LTable, reserved []string) (*NodeDef, error) {
 	def := &NodeDef{
 		Type:        luaString(tbl, "type"),
 		Label:       luaString(tbl, "label"),
@@ -336,7 +375,7 @@ func readDefinition(tbl *lua.LTable) (*NodeDef, error) {
 	}
 	// By name, before anything else is checked. A pack whose node is called
 	// "llm" is not a pack with a naming problem.
-	if contains(builtinNodeTypes, def.Type) {
+	if contains(reserved, def.Type) {
 		return nil, fmt.Errorf("type %q is a built-in Zyvro node and cannot be redefined by a pack", def.Type)
 	}
 	if def.Label == "" {
@@ -356,8 +395,16 @@ func readDefinition(tbl *lua.LTable) (*NodeDef, error) {
 	if def.Outputs, err = readPorts(tbl, "outputs"); err != nil {
 		return nil, err
 	}
-	if len(def.Outputs) == 0 {
-		return nil, fmt.Errorf("outputs must name at least one of %s", strings.Join(portTypes, ", "))
+	def.ToolOnly = luaBool(tbl, "toolOnly")
+	// A node with no outputs used to be refused, on the grounds that nobody
+	// could do anything with its result. Two kinds of node disprove that: a
+	// terminal one, which renders what reaches it and hands nothing on, and a
+	// tool-only one, which the Brain calls and the data flow never touches. So
+	// the rule is now narrower — a node has to have somewhere for its value to
+	// go, or say that it has not on purpose.
+	if len(def.Outputs) == 0 && !def.ToolOnly && len(def.Inputs) == 0 {
+		return nil, fmt.Errorf("this node has no inputs and no outputs: name an output (one of %s), or set toolOnly = true if it exists only to be bound to a Brain",
+			strings.Join(portTypes, ", "))
 	}
 	if def.Config, err = readConfig(tbl); err != nil {
 		return nil, err

@@ -1,0 +1,22 @@
+{
+  "outputs": {
+    "A": {
+      "type": "json",
+      "value": {
+        "data": {
+          "enabled": true,
+          "retries": 3
+        }
+      }
+    },
+    "B": {
+      "type": "json",
+      "value": {
+        "data": {
+          "enabled": true,
+          "retries": 3
+        }
+      }
+    }
+  }
+}

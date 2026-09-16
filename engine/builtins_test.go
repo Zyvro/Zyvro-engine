@@ -1,147 +1,31 @@
 package engine
 
 import (
-	"bytes"
+	"context"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/printer"
-	"go/token"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/Zyvro/Zyvro-engine/plugins"
 )
 
-// Three lists have to agree about what a built-in node is, and none of them can
-// be derived from the others:
+// What a built-in is, and who is allowed to be one.
 //
-//   - the switch in executeWithInput, which is what actually runs one;
-//   - builtinKinds in nodes.go, which is what the builder may place;
-//   - plugins.builtinNodeTypes, which is what a pack may not shadow.
+// This file used to parse Go. It had to: the list of names a pack could not
+// take lived in the plugins package as a hand-written copy of the engine's
+// dispatch switch, because plugins must not import engine, and nothing but a
+// test reading both files as syntax could keep the copy in step. A name missing
+// from it was a name a pack could take, and a pack defining "llm" would have
+// been a very good attack that loaded cleanly.
 //
-// The third is the dangerous one. It lives in plugins because plugins must not
-// import engine, and a name missing from it is a name a pack may take: a pack
-// defining "llm" would be a very good attack, and it would have loaded cleanly.
-// Nothing keeps a hand-maintained mirror in step except a test that reads both
-// sides, which is what this file is. It lives in engine because engine is the
-// package allowed to import plugins, the direction that does not cycle.
-//
-// Reading the source rather than a variable is deliberate: plugins.builtinNodeTypes
-// is unexported and stays that way, and the switch is a switch and cannot be
-// enumerated at runtime at all. So both are read as Go syntax, and a test that
-// cannot find either list fails rather than quietly checking nothing.
-
-// ---------- the three lists ----------
-
-// switchNodeTypes returns the case labels of the dispatch switch in
-// executeWithInput: the definitive answer to "what can this engine run".
-func switchNodeTypes(t *testing.T) []string {
-	t.Helper()
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "runtime.go", nil, 0)
-	if err != nil {
-		t.Fatalf("parse runtime.go: %v", err)
-	}
-
-	var types []string
-	found := false
-	ast.Inspect(file, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "executeWithInput" {
-			return true
-		}
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			sw, ok := n.(*ast.SwitchStmt)
-			if !ok || sw.Tag == nil || exprString(t, fset, sw.Tag) != "in.Node.Type" {
-				return true
-			}
-			found = true
-			for _, stmt := range sw.Body.List {
-				clause, ok := stmt.(*ast.CaseClause)
-				if !ok {
-					continue
-				}
-				for _, expr := range clause.List {
-					types = append(types, stringLit(t, expr))
-				}
-			}
-			return false
-		})
-		return false
-	})
-
-	if !found {
-		t.Fatal("no switch on in.Node.Type in executeWithInput: this test has lost track of the dispatch and is no longer checking anything")
-	}
-	sort.Strings(types)
-	return types
-}
-
-// pluginsMirror returns plugins.builtinNodeTypes, read from its source.
-func pluginsMirror(t *testing.T) []string {
-	t.Helper()
-	path := filepath.Join("..", "plugins", "pack.go")
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, 0)
-	if err != nil {
-		t.Fatalf("parse %s: %v", path, err)
-	}
-
-	var types []string
-	found := false
-	for _, decl := range file.Decls {
-		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.VAR {
-			continue
-		}
-		for _, spec := range gen.Specs {
-			value, ok := spec.(*ast.ValueSpec)
-			if !ok || len(value.Names) != 1 || value.Names[0].Name != "builtinNodeTypes" || len(value.Values) != 1 {
-				continue
-			}
-			lit, ok := value.Values[0].(*ast.CompositeLit)
-			if !ok {
-				t.Fatalf("%s: builtinNodeTypes is no longer a literal list", path)
-			}
-			found = true
-			for _, elem := range lit.Elts {
-				types = append(types, stringLit(t, elem))
-			}
-		}
-	}
-
-	if !found {
-		t.Fatalf("%s: no builtinNodeTypes: either it was renamed, or a pack can now shadow a built-in and nothing says so", path)
-	}
-	sort.Strings(types)
-	return types
-}
-
-func exprString(t *testing.T, fset *token.FileSet, expr ast.Expr) string {
-	t.Helper()
-	var buf bytes.Buffer
-	if err := printer.Fprint(&buf, fset, expr); err != nil {
-		t.Fatalf("print expression: %v", err)
-	}
-	return buf.String()
-}
-
-func stringLit(t *testing.T, expr ast.Expr) string {
-	t.Helper()
-	lit, ok := expr.(*ast.BasicLit)
-	if !ok || lit.Kind != token.STRING {
-		t.Fatalf("expected a string literal node type, got %T", expr)
-	}
-	s, err := strconv.Unquote(lit.Value)
-	if err != nil {
-		t.Fatalf("unquote %s: %v", lit.Value, err)
-	}
-	return s
-}
+// The copy is gone. The engine tells plugins what the reserved names are —
+// ReservedNodeTypes is passed to NewRegistry and to Load — so there is one list
+// and it lives where the knowledge is. That makes every check below a question
+// about behaviour rather than about source text, which is the point: a test that
+// reads a literal can only prove the literal says what it says.
 
 // diff reports what is in want but not got, and the other way round, which is
 // the only form of this failure anybody can act on.
@@ -167,34 +51,165 @@ func diff(got, want []string) (missing, extra []string) {
 	return missing, extra
 }
 
-// ---------- the agreements ----------
-
-// TestPluginsMirrorsTheEngineSwitchExactly is the test the sandbox author asked
-// for. A built-in added to the engine and not to plugins.builtinNodeTypes is a
-// built-in a pack may shadow, and this is what stops that being discovered by
-// the pack that does it.
-func TestPluginsMirrorsTheEngineSwitchExactly(t *testing.T) {
-	engineTypes := switchNodeTypes(t)
-	mirror := pluginsMirror(t)
-
-	missing, extra := diff(mirror, engineTypes)
-	for _, name := range missing {
-		t.Errorf("%q is a built-in the engine runs but plugins.builtinNodeTypes does not list: a pack can shadow it. Add it to builtinNodeTypes in plugins/pack.go.", name)
+// everythingTheEngineShips is every node type a person can end up with in a
+// graph without installing anything: the palette, plus the ones that are still
+// dispatched but refuse to run.
+func everythingTheEngineShips() []string {
+	var out []string
+	for _, k := range Catalogue(nil) {
+		out = append(out, k.Type)
 	}
-	for _, name := range extra {
-		t.Errorf("%q is listed in plugins.builtinNodeTypes but the engine has no case for it: packs are being refused a name nothing uses. Remove it from builtinNodeTypes in plugins/pack.go.", name)
+	out = append(out, disabledNodeTypes...)
+	sort.Strings(out)
+	return out
+}
+
+// ---------- the bundled pack ----------
+
+// TestTheBundledPackLoadsWithNoFilesystem. It is compiled into the binary, and
+// that is a security property as much as a packaging one: a built-in read off
+// disk is a built-in that anything with write access to that disk can replace.
+// Running from an empty directory is how this says so — nothing under the
+// working directory could supply these nodes, and they are all there anyway.
+func TestTheBundledPackLoadsWithNoFilesystem(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	pack, err := plugins.LoadFS(builtinPackFS, "builtin", nil)
+	if err != nil {
+		t.Fatalf("the embedded pack does not load: %v", err)
+	}
+	if pack.Manifest.Name != BuiltinPackName {
+		t.Fatalf("pack name = %q, want %q", pack.Manifest.Name, BuiltinPackName)
+	}
+	if len(pack.Nodes) == 0 {
+		t.Fatal("the embedded pack contributed no nodes")
+	}
+
+	// And it runs, not merely parses: a node executed from a directory holding
+	// nothing at all still produces its output.
+	rt := NewRuntime("exec1", thenPreview("zyvroTools", nil), nil, nil, nil)
+	rt.Plugins = NewRegistry()
+	if err := rt.Execute(context.Background()); err != nil {
+		t.Fatalf("a bundled node did not run with no filesystem under it: %v", err)
 	}
 }
 
-// TestPluginsRefusesEveryBuiltinByName checks the same agreement through the
-// behaviour rather than the source, so that reading the list the wrong way
-// cannot make this file pass while a pack named "llm" installs happily.
-func TestPluginsRefusesEveryBuiltinByName(t *testing.T) {
-	for _, nodeType := range switchNodeTypes(t) {
+// TestEveryBundledNodeDeclaresWhatThePaletteNeeds: these entries are served to
+// the builder from GET /api/nodes and drawn from nothing else, so a node that
+// forgets its label or its category is a node that looks broken on the canvas.
+func TestEveryBundledNodeDeclaresWhatThePaletteNeeds(t *testing.T) {
+	for _, k := range Catalogue(nil) {
+		t.Run(k.Type, func(t *testing.T) {
+			if k.Label == "" || k.Description == "" || k.Category == "" {
+				t.Errorf("incomplete palette entry: %+v", k)
+			}
+			if k.Defaults == nil {
+				t.Error("defaults is nil: the builder spreads it into a new node's config")
+			}
+			// The badge exists to say "this did not come from us". Putting it
+			// on the nodes that did would make it mean nothing.
+			if k.Pack != "" {
+				t.Errorf("a node the engine ships is badged as coming from pack %q", k.Pack)
+			}
+		})
+	}
+}
+
+// ---------- one implementation per node type ----------
+
+// TestNothingIsBothAGoNodeAndALuaOne. The switch is tried first, so a type in
+// both places would run the Go one and the Lua one would be dead code nobody
+// could tell was dead — including whoever was editing it.
+func TestNothingIsBothAGoNodeAndALuaOne(t *testing.T) {
+	reg := NewRegistry()
+	for _, nodeType := range BuiltinNodeTypes() {
+		if _, ok := reg.Kind(nodeType); ok {
+			t.Errorf("%q is dispatched in Go and also defined by the bundled pack; the Lua would never run", nodeType)
+		}
+	}
+}
+
+// TestEveryNodeTheEngineShipsActuallyDispatches: whatever the palette offers
+// has to reach an implementation. A node that can be placed and then reports
+// "unknown node type" is the failure this whole arrangement could produce
+// silently — one rename in the bundled pack and a node disappears.
+func TestEveryNodeTheEngineShipsActuallyDispatches(t *testing.T) {
+	for _, nodeType := range everythingTheEngineShips() {
 		t.Run(nodeType, func(t *testing.T) {
-			_, err := plugins.Load(packDefining(t, nodeType))
+			// No providers, no files, no inputs: every node fails here, and
+			// what matters is which failure. They fail for their own reasons —
+			// "generate image needs a prompt", "video generation is disabled" —
+			// and none of them may fail for not existing.
+			rt := NewRuntime("exec1", thenPreview(nodeType, nil), nil, nil, nil)
+			err := rt.Execute(context.Background())
+			if err != nil && strings.Contains(err.Error(), "unknown node type") {
+				t.Errorf("the palette offers %q but nothing runs it: %v", nodeType, err)
+			}
+		})
+	}
+}
+
+// TestBuiltinNodeTypesIsTheGoHalf: BuiltinNodeTypes is what the engine says it
+// implements itself, and it has to be the Go palette plus the disabled cases,
+// not one of them. It is half of ReservedNodeTypes, and a name missing from it
+// is a name a pack may take.
+func TestBuiltinNodeTypesIsTheGoHalf(t *testing.T) {
+	want := []string{"fileInput", "fileOutput", "generateVideo", "imageInput", "mergeText", "output", "preview", "textInput"}
+	missing, extra := diff(BuiltinNodeTypes(), want)
+	if len(missing) > 0 || len(extra) > 0 {
+		t.Errorf("BuiltinNodeTypes is %v; missing %v, unexpected %v.\n"+
+			"A node moved into or out of Go changes this list. If that was the intention, say so here.",
+			BuiltinNodeTypes(), missing, extra)
+	}
+}
+
+// ---------- what a pack may not take ----------
+
+// TestNoPackCanTakeAnyNameTheEngineShips is the attack this arrangement exists
+// to refuse, and the inversion is what makes it checkable in one loop: the
+// names come from the engine, so the test cannot be looking at a stale copy.
+//
+// It covers the Lua built-ins as well as the Go ones, which the old source-
+// reading test could not have: "llm" is now a file in the bundled pack, and a
+// store pack claiming it has to be refused exactly as firmly as one claiming
+// "textInput".
+func TestNoPackCanTakeAnyNameTheEngineShips(t *testing.T) {
+	reserved := ReservedNodeTypes()
+	if len(reserved) <= len(BuiltinNodeTypes()) {
+		t.Fatal("ReservedNodeTypes does not include the bundled pack's types, so a pack can shadow one")
+	}
+	for _, nodeType := range everythingTheEngineShips() {
+		t.Run(nodeType, func(t *testing.T) {
+			_, err := plugins.Load(packDefining(t, nodeType), reserved)
 			if err == nil {
-				t.Fatalf("a pack was allowed to define %q, which is a built-in", nodeType)
+				t.Fatalf("a pack was allowed to define %q, which is a node the engine ships", nodeType)
+			}
+			if !strings.Contains(err.Error(), "built-in") {
+				t.Errorf("the refusal does not say why: %v", err)
+			}
+		})
+	}
+}
+
+// TestTheBundledPackCannotBeShadowedAtInstallEither. Load is the first gate and
+// the one with the good message, but a pack that got past it — loaded against a
+// shorter reserved list, or written before a node existed — must still not be
+// able to replace a built-in in a live registry.
+func TestTheBundledPackCannotBeShadowedAtInstallEither(t *testing.T) {
+	for _, nodeType := range []string{"llm", "brain", "generateImage", "voxelPreview"} {
+		t.Run(nodeType, func(t *testing.T) {
+			// Loaded reserving nothing, which is the position a pack written
+			// before this node existed would have been in.
+			pack, err := plugins.Load(packDefining(t, nodeType), nil)
+			if err != nil {
+				t.Fatalf("fixture pack did not load: %v", err)
+			}
+			err = NewRegistry().Install(pack)
+			if err == nil {
+				t.Fatalf("a pack shadowing the built-in %q was installed", nodeType)
+			}
+			if !strings.Contains(err.Error(), "built-in") {
+				t.Errorf("the refusal reads as a collision between two packs rather than as shadowing a built-in: %v", err)
 			}
 		})
 	}
@@ -218,38 +233,18 @@ func packDefining(t *testing.T, nodeType string) string {
 	return dir
 }
 
-// TestCatalogueCoversEveryNodeTheEngineCanRun is the other direction of the
-// same agreement, and it matters now that the desktop learns the palette from
-// GET /api/nodes instead of carrying its own copy: a built-in missing from
-// builtinKinds does not fail, it simply disappears from the editor, which is
-// the kind of bug that gets noticed a release later.
-func TestCatalogueCoversEveryNodeTheEngineCanRun(t *testing.T) {
-	served := []string{}
-	for _, k := range BuiltinKinds() {
-		served = append(served, k.Type)
-	}
-	// A disabled node is deliberately absent from the palette: nobody should be
-	// able to place a node that refuses to run. The case for it stays so an old
-	// workflow still gets the real explanation instead of "unknown node type",
-	// so it is expected here and named rather than quietly tolerated.
-	served = append(served, disabledNodeTypes...)
+// ---------- the palette's own promises ----------
 
-	missing, extra := diff(served, switchNodeTypes(t))
-	for _, name := range missing {
-		t.Errorf("%q is a node the engine runs but the palette does not offer: it has disappeared from the editor. Add it to builtinKinds in engine/nodes.go, or to disabledNodeTypes if that is on purpose.", name)
-	}
-	for _, name := range extra {
-		t.Errorf("%q is offered in the palette but executeWithInput has no case for it: placing it would fail at run time. Remove it from engine/nodes.go.", name)
-	}
-}
-
-// TestBuiltinNodeTypesIsTheWholeReservedSet: BuiltinNodeTypes is what a caller
-// outside this package asks when it wants to know which names are taken, so it
-// has to be the palette and the disabled cases together, not just one of them.
-func TestBuiltinNodeTypesIsTheWholeReservedSet(t *testing.T) {
-	missing, extra := diff(BuiltinNodeTypes(), switchNodeTypes(t))
-	if len(missing) > 0 || len(extra) > 0 {
-		t.Errorf("BuiltinNodeTypes disagrees with the dispatch switch: missing %v, extra %v", missing, extra)
+// TestDisabledNodesAreNotInThePalette: nobody should be able to place a node
+// that refuses to run. The dispatch keeps a case for it so that an old workflow
+// still gets the real explanation instead of "unknown node type".
+func TestDisabledNodesAreNotInThePalette(t *testing.T) {
+	for _, k := range Catalogue(nil) {
+		for _, disabled := range disabledNodeTypes {
+			if k.Type == disabled {
+				t.Errorf("%q refuses to run but the palette offers it", disabled)
+			}
+		}
 	}
 }
 
@@ -258,7 +253,7 @@ func TestBuiltinNodeTypesIsTheWholeReservedSet(t *testing.T) {
 // the same set or one of them is lying to somebody.
 func TestLocalOnlyFlagAgreesWithLocalOnlyNodeTypes(t *testing.T) {
 	flagged := []string{}
-	for _, k := range BuiltinKinds() {
+	for _, k := range Catalogue(nil) {
 		if k.LocalOnly {
 			flagged = append(flagged, k.Type)
 		}
@@ -283,5 +278,17 @@ func TestCatalogueIsCopiedPerCall(t *testing.T) {
 	}
 	if _, ok := second[0].Defaults["injected"]; ok {
 		t.Error("a caller added a default to the shared palette")
+	}
+
+	// And the same for the half that comes from the bundled pack, which is
+	// shared between every registry in the process.
+	kinds := Catalogue(nil)
+	for i := range kinds {
+		kinds[i].Defaults["injected"] = true
+	}
+	for _, k := range Catalogue(nil) {
+		if _, ok := k.Defaults["injected"]; ok {
+			t.Fatalf("a caller reached into the bundled pack's definition of %q", k.Type)
+		}
 	}
 }

@@ -59,7 +59,7 @@ func (r *recordingFiles) Write(rel string, data []byte) (string, error) {
 func oneNode(t *testing.T, manifest, src string) *Registry {
 	t.Helper()
 	p := loadOK(t, manifest, map[string]string{"node.lua": src})
-	r := NewRegistry()
+	r := NewRegistry(testReserved)
 	if err := r.Install(p); err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -568,5 +568,371 @@ func TestLogSurvivesAFailedRun(t *testing.T) {
 	}
 	if len(log) != 2 || log[0] != "step one" {
 		t.Fatalf("the log did not survive: %#v", log)
+	}
+}
+
+// ---------- the wider capabilities ----------
+//
+// image, vision and agent are the three capabilities that exist so the engine's
+// own nodes could become Lua without the privileged work becoming Lua too. Each
+// grants a set of host functions and nothing else, and what follows is that
+// claim from inside the sandbox, where it is what a node author observes.
+
+const everyCapability = `{"name":"powers","version":"1.0.0","capabilities":["llm","files","image","vision","agent"]}`
+
+// countingNode is a host function that records its calls and answers with a
+// fixed output. It stands in for the engine's real implementations, which this
+// package cannot see and does not need to.
+type countingNode struct {
+	name  string
+	calls []map[string]any
+	out   *Output
+	err   error
+}
+
+func (c *countingNode) fn(_ context.Context, cfg map[string]any) (*Output, error) {
+	c.calls = append(c.calls, cfg)
+	if c.err != nil {
+		return nil, c.err
+	}
+	if c.out != nil {
+		return c.out, nil
+	}
+	return &Output{Type: "text", Value: map[string]any{"text": c.name}}, nil
+}
+
+// everyHostFunction is a HostInput carrying a live function for every one of
+// them, so that anything missing from a node's ctx is missing because of the
+// capability and not because the test forgot to supply it.
+func everyHostFunction() (HostInput, map[string]*countingNode) {
+	nodes := map[string]*countingNode{}
+	fn := func(name string) NodeFunc {
+		n := &countingNode{name: name}
+		nodes[name] = n
+		return n.fn
+	}
+	in := HostInput{
+		LLM:      (&fakeLLM{}).complete,
+		Complete: fn("complete"),
+		Image: ImageFuncs{
+			Generate:         fn("generateImage"),
+			Edit:             fn("editImage"),
+			RemoveBackground: fn("removeBackground"),
+			Rotate:           fn("rotateImage"),
+			Flip:             fn("flipImage"),
+			Compose:          fn("composeImages"),
+		},
+		Vision: VisionFuncs{Describe: fn("vision")},
+		Agent:  AgentFuncs{Brain: fn("brain"), Tools: fn("agentTools")},
+	}
+	return in, nodes
+}
+
+// reportsPresence is a node that says which host functions its ctx carries.
+const reportsPresence = `
+	return {
+		type = "probe",
+		outputs = { "text" },
+		run = function(ctx)
+			local names = { "llm", "complete", "generateImage", "editImage", "removeBackground",
+				"rotateImage", "flipImage", "composeImages", "vision", "brain", "agentTools" }
+			local present = {}
+			for _, name in ipairs(names) do
+				if ctx[name] ~= nil then present[#present + 1] = name end
+			end
+			return { text = table.concat(present, ",") }
+		end,
+	}
+`
+
+func presentFunctions(t *testing.T, manifest string) map[string]bool {
+	t.Helper()
+	r := oneNode(t, manifest, reportsPresence)
+	in, _ := everyHostFunction()
+	in.Files = &recordingFiles{inner: realFiles(t, t.TempDir())}
+	out := runNodeOK(t, r, "probe", in)
+
+	got := map[string]bool{}
+	for _, name := range strings.Split(fmt.Sprint(out.Value["text"]), ",") {
+		if name != "" {
+			got[name] = true
+		}
+	}
+	return got
+}
+
+// TestEachCapabilityGrantsItsOwnFunctionsAndNoOthers. The point of splitting
+// them is that they can be granted separately: a pack that needs to describe an
+// image must not have to ask for the agent loop as well, and a pack that asked
+// for neither must not be able to tell that the host could have offered them.
+func TestEachCapabilityGrantsItsOwnFunctionsAndNoOthers(t *testing.T) {
+	for _, tc := range []struct {
+		capability string
+		want       []string
+	}{
+		{"", nil},
+		{`"llm"`, []string{"llm", "complete"}},
+		{`"image"`, []string{"generateImage", "editImage", "removeBackground", "rotateImage", "flipImage", "composeImages"}},
+		{`"vision"`, []string{"vision"}},
+		{`"agent"`, []string{"brain", "agentTools"}},
+	} {
+		name := strings.Trim(tc.capability, `"`)
+		if name == "" {
+			name = "none"
+		}
+		t.Run(name, func(t *testing.T) {
+			caps := ""
+			if tc.capability != "" {
+				caps = `,"capabilities":[` + tc.capability + `]`
+			}
+			got := presentFunctions(t, `{"name":"one-thing","version":"1.0.0"`+caps+`}`)
+
+			for _, fn := range tc.want {
+				if !got[fn] {
+					t.Errorf("ctx.%s is missing from a pack that declared %s", fn, name)
+				}
+				delete(got, fn)
+			}
+			for fn := range got {
+				t.Errorf("ctx.%s was granted to a pack that declared only %s", fn, name)
+			}
+		})
+	}
+}
+
+// ---------- the receipt ----------
+
+// TestAHostResultCarriesTheOutputTheHostBuilt. An image node's output has a
+// byte count and the URL of the copy the host stored, and a Brain's has the
+// trace of what it did. None of that survives a trip through a Lua table, which
+// is why a host function hands back something the script returns rather than
+// something it rebuilds.
+func TestAHostResultCarriesTheOutputTheHostBuilt(t *testing.T) {
+	r := oneNode(t, everyCapability, `
+		return {
+			type = "make",
+			outputs = { "image" },
+			run = function(ctx) return ctx.generateImage{ prompt = "a cat" } end,
+		}
+	`)
+	in, nodes := everyHostFunction()
+	nodes["generateImage"].out = &Output{Type: "image", Value: map[string]any{
+		"mimeType": "image/png",
+		"dataUrl":  "data:image/png;base64,AAAA",
+		"bytes":    1234,
+		"url":      "https://media.example/stored.png",
+	}}
+
+	out := runNodeOK(t, r, "make", in)
+	if out.Type != "image" {
+		t.Fatalf("type = %q, want image", out.Type)
+	}
+	for key, want := range map[string]any{"bytes": 1234, "url": "https://media.example/stored.png"} {
+		if out.Value[key] != want {
+			t.Errorf("%s = %v, want %v: the host's own output did not survive", key, out.Value[key], want)
+		}
+	}
+	if len(nodes["generateImage"].calls) != 1 {
+		t.Fatalf("the host function was called %d times, want once", len(nodes["generateImage"].calls))
+	}
+	if got := nodes["generateImage"].calls[0]["prompt"]; got != "a cat" {
+		t.Errorf("the script's settings did not reach the host: %v", nodes["generateImage"].calls[0])
+	}
+}
+
+// TestAScriptCanReadTheMetadataButNotThePayload. What a script gets back is a
+// receipt, not the value: a node looping over image generation and copying each
+// data URL into Lua would spend the memory budget on strings it has no use for.
+func TestAScriptCanReadTheMetadataButNotThePayload(t *testing.T) {
+	r := oneNode(t, everyCapability, `
+		return {
+			type = "inspect",
+			outputs = { "text" },
+			run = function(ctx)
+				local res = ctx.generateImage{ prompt = "x" }
+				return { text = res.type .. "/" .. tostring(res.bytes) .. "/" .. tostring(res.dataUrl) }
+			end,
+		}
+	`)
+	in, nodes := everyHostFunction()
+	nodes["generateImage"].out = &Output{Type: "image", Value: map[string]any{
+		"mimeType": "image/png", "dataUrl": "data:image/png;base64,AAAA", "bytes": 7,
+	}}
+
+	out := runNodeOK(t, r, "inspect", in)
+	if got := fmt.Sprint(out.Value["text"]); got != "image/7/nil" {
+		t.Fatalf("receipt = %q, want the metadata and no payload", got)
+	}
+}
+
+// TestAForgedReceiptIsIgnored. The key a receipt keeps its output under is
+// reserved rather than hidden, so a script can certainly write to it — but the
+// only thing it can put there is something that is not a receipt, and the
+// result is read as the ordinary table it is.
+func TestAForgedReceiptIsIgnored(t *testing.T) {
+	r := oneNode(t, everyCapability, `
+		return {
+			type = "forge",
+			outputs = { "text" },
+			run = function(ctx)
+				return { __zyvroHostResult = "nice try", text = "the ordinary reading" }
+			end,
+		}
+	`)
+	in, _ := everyHostFunction()
+	out := runNodeOK(t, r, "forge", in)
+	if out.Type != "text" || out.Value["text"] != "the ordinary reading" {
+		t.Fatalf("a forged receipt changed the result: %+v", out)
+	}
+}
+
+// ---------- errors from a host function ----------
+
+// TestAHostFunctionsErrorComesBackAsTheHostWroteIt. "generate image needs a
+// prompt" is the sentence a person has always read when they forgot one, and it
+// must not become that sentence wearing a Lua chunk name, a line number and a
+// stack traceback belonging to a file they have never opened.
+func TestAHostFunctionsErrorComesBackAsTheHostWroteIt(t *testing.T) {
+	r := oneNode(t, everyCapability, `
+		return {
+			type = "ask",
+			outputs = { "image" },
+			run = function(ctx) return ctx.generateImage{} end,
+		}
+	`)
+	in, nodes := everyHostFunction()
+	nodes["generateImage"].err = fmt.Errorf("generate image needs a prompt")
+
+	err := runNodeFails(t, r, "ask", in, "generate image needs a prompt")
+	if got := err.Error(); got != "generate image needs a prompt" {
+		t.Fatalf("error = %q, want exactly what the host wrote", got)
+	}
+}
+
+// TestAScriptsOwnFailureIsStillReportedAsTheScripts. The undressing above must
+// not become a way for a script to have its own mistakes attributed to the
+// host: a node that catches a host error and then goes wrong by itself is a
+// node whose author needs the file and the line.
+func TestAScriptsOwnFailureIsStillReportedAsTheScripts(t *testing.T) {
+	r := oneNode(t, everyCapability, `
+		return {
+			type = "swallow",
+			outputs = { "text" },
+			run = function(ctx)
+				pcall(function() ctx.generateImage{} end)
+				error("something else went wrong")
+			end,
+		}
+	`)
+	in, nodes := everyHostFunction()
+	nodes["generateImage"].err = fmt.Errorf("generate image needs a prompt")
+
+	err := runNodeFails(t, r, "swallow", in, "something else went wrong")
+	if strings.Contains(err.Error(), "needs a prompt") {
+		t.Fatalf("the script's own failure was reported as the host's: %v", err)
+	}
+	if !strings.Contains(err.Error(), "swallow") {
+		t.Errorf("a script's own error no longer names the node: %v", err)
+	}
+}
+
+// ---------- the shared budget ----------
+
+// TestEveryProviderBackedFunctionSharesOneBudget. They share one bill, and a
+// separate allowance for each would let a node spend several budgets instead of
+// the one a node run is allowed.
+func TestEveryProviderBackedFunctionSharesOneBudget(t *testing.T) {
+	for _, call := range []string{
+		"ctx.llm{ prompt = 'x' }",
+		"ctx.complete{ prompt = 'x' }",
+		"ctx.generateImage{ prompt = 'x' }",
+		"ctx.editImage{ prompt = 'x' }",
+		"ctx.removeBackground{}",
+		"ctx.vision{ instruction = 'x' }",
+		"ctx.brain{ goal = 'x' }",
+	} {
+		t.Run(call, func(t *testing.T) {
+			r := oneNode(t, everyCapability, `
+				return {
+					type = "greedy",
+					outputs = { "text" },
+					run = function(ctx)
+						for i = 1, 100 do `+call+` end
+						return { text = "never reached" }
+					end,
+				}
+			`)
+			in, nodes := everyHostFunction()
+			llm := &fakeLLM{}
+			in.LLM = llm.complete
+			limits := DefaultLimits()
+			limits.MaxLLMCalls = 2
+			in.Limits = limits
+
+			runNodeFails(t, r, "greedy", in, "limit of 2")
+
+			made := len(llm.calls)
+			for _, n := range nodes {
+				made += len(n.calls)
+			}
+			if made != 2 {
+				t.Fatalf("the budget let %d calls through, expected 2", made)
+			}
+		})
+	}
+}
+
+// TestLocalWorkIsNotChargedToTheModelBudget: rotating, mirroring and composing
+// reach no provider and cost nothing but the time and memory every script is
+// already bounded by.
+func TestLocalWorkIsNotChargedToTheModelBudget(t *testing.T) {
+	r := oneNode(t, everyCapability, `
+		return {
+			type = "free",
+			outputs = { "text" },
+			run = function(ctx)
+				for i = 1, 50 do
+					ctx.rotateImage{ degrees = 90 }
+					ctx.flipImage{ axis = "h" }
+					ctx.composeImages{ shape = "cube" }
+					ctx.agentTools()
+				end
+				return { text = "done" }
+			end,
+		}
+	`)
+	in, nodes := everyHostFunction()
+	limits := DefaultLimits()
+	limits.MaxLLMCalls = 1
+	in.Limits = limits
+
+	runNodeOK(t, r, "free", in)
+	if got := len(nodes["rotateImage"].calls); got != 50 {
+		t.Fatalf("rotate ran %d times against a model budget of 1, want 50", got)
+	}
+}
+
+// TestAFailedHostCallStillCountsAgainstTheBudget. Otherwise a node whose every
+// call fails gets an unlimited number of them.
+func TestAFailedHostCallStillCountsAgainstTheBudget(t *testing.T) {
+	r := oneNode(t, everyCapability, `
+		return {
+			type = "retry",
+			outputs = { "text" },
+			run = function(ctx)
+				for i = 1, 100 do pcall(function() ctx.generateImage{ prompt = "x" } end) end
+				return { text = "done" }
+			end,
+		}
+	`)
+	in, nodes := everyHostFunction()
+	nodes["generateImage"].err = fmt.Errorf("provider down")
+	limits := DefaultLimits()
+	limits.MaxLLMCalls = 2
+	in.Limits = limits
+
+	runNodeOK(t, r, "retry", in)
+	if got := len(nodes["generateImage"].calls); got != 2 {
+		t.Fatalf("a retry loop made %d calls against a budget of 2", got)
 	}
 }

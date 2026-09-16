@@ -1,0 +1,24 @@
+{
+  "outputs": {
+    "A": {
+      "type": "text",
+      "value": {
+        "text": "a line"
+      }
+    },
+    "B": {
+      "type": "image",
+      "value": {
+        "bytes": 98,
+        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAKUlEQVR4nGL5//8/AzbABGOgAxYGMNAMvAsTYbi+XhmfDtIlGEl2FWAAf8gJDkqVTQkAAAAASUVORK5CYII=",
+        "mimeType": "image/png"
+      }
+    },
+    "C": {
+      "type": "text",
+      "value": {
+        "text": "a line\n{\"bytes\":98,\"dataUrl\":\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAKUlEQVR4nGL5//8/AzbABGOgAxYGMNAMvAsTYbi+XhmfDtIlGEl2FWAAf8gJDkqVTQkAAAAASUVORK5CYII=\",\"mimeType\":\"image/png\"}"
+      }
+    }
+  }
+}

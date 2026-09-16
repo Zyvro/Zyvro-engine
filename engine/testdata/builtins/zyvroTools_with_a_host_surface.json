@@ -1,0 +1,26 @@
+{
+  "outputs": {
+    "A": {
+      "type": "json",
+      "value": {
+        "data": {
+          "tools": [
+            "zyvro_list_workflows",
+            "zyvro_run_workflow"
+          ]
+        }
+      }
+    },
+    "B": {
+      "type": "json",
+      "value": {
+        "data": {
+          "tools": [
+            "zyvro_list_workflows",
+            "zyvro_run_workflow"
+          ]
+        }
+      }
+    }
+  }
+}

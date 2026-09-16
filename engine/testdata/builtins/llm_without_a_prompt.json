@@ -1,0 +1,3 @@
+{
+  "error": "node A (llm): LLM node needs a prompt (config or text input)"
+}

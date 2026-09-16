@@ -116,8 +116,10 @@ func TestNodeCatalogueServesBuiltInsAndPackNodes(t *testing.T) {
 	e := newPackEnv(t, func(dir string) { installFixturePack(t, dir, "text-tools") })
 	kinds := e.nodeCatalogue()
 
-	if got, want := len(kinds), len(engine.BuiltinKinds())+2; got != want {
-		t.Fatalf("catalogue has %d entries, want %d (the built-ins plus the pack's two nodes)", got, want)
+	// The whole palette: what the engine still implements in Go, what its
+	// bundled pack contributes, and the two nodes this project's pack added.
+	if got, want := len(kinds), len(engine.Catalogue(nil))+2; got != want {
+		t.Fatalf("catalogue has %d entries, want %d (everything the engine ships plus the pack's two nodes)", got, want)
 	}
 
 	builtin := findKind(kinds, "llm")

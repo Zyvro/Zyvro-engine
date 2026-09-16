@@ -1,0 +1,26 @@
+{
+  "outputs": {
+    "A": {
+      "type": "image",
+      "value": {
+        "bytes": 104,
+        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAL0lEQVR4nGL5//8/AymACcYYPBpYYAwQvKupCWOiAOXr18m3YVQDMRoYh0FaAgwANRoJHqVRR4AAAAAASUVORK5CYII=",
+        "mimeType": "image/png"
+      }
+    },
+    "B": {
+      "type": "image",
+      "value": {
+        "bytes": 103,
+        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAALklEQVR4nGJioBAMAwNYYAwYuKOh8R/GxgZUbtxgpKoLRg0YDAYwDLgLBt4AwAD5NQQhOzOsPwAAAABJRU5ErkJggg==",
+        "mimeType": "image/png",
+        "url": "https://media.test/exec-fixed/B/transparent.png"
+      }
+    }
+  },
+  "media": [
+    "exec-fixed/B/pass-white.png (image/png, 104 bytes)",
+    "exec-fixed/B/pass-black.png (image/png, 100 bytes)",
+    "exec-fixed/B/transparent.png (image/png, 103 bytes)"
+  ]
+}

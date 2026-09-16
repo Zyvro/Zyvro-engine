@@ -1,0 +1,22 @@
+{
+  "outputs": {
+    "A": {
+      "type": "text",
+      "value": {
+        "text": "first"
+      }
+    },
+    "B": {
+      "type": "text",
+      "value": {
+        "text": "second"
+      }
+    },
+    "C": {
+      "type": "text",
+      "value": {
+        "text": "first -- second"
+      }
+    }
+  }
+}

@@ -18,12 +18,24 @@ type Registry struct {
 	mu    sync.RWMutex
 	nodes map[string]*NodeDef
 	packs map[string]bool
+	// reserved are the node types the host implements itself and no pack may
+	// take. They arrive from outside because this package cannot import the one
+	// that knows them, and they are held here rather than in a literal so there
+	// is only ever one such list in the product.
+	reserved []string
+	// builtin is the name of the pack the host bundles, if one was installed
+	// through InstallBuiltin. It is the one pack allowed to define reserved
+	// names, and the one pack whose types a later pack may not take.
+	builtin string
 }
 
-func NewRegistry() *Registry {
+// NewRegistry returns an empty registry that will refuse any pack defining one
+// of the reserved node types.
+func NewRegistry(reserved []string) *Registry {
 	return &Registry{
-		nodes: map[string]*NodeDef{},
-		packs: map[string]bool{},
+		nodes:    map[string]*NodeDef{},
+		packs:    map[string]bool{},
+		reserved: append([]string(nil), reserved...),
 	}
 }
 
@@ -33,7 +45,19 @@ func NewRegistry() *Registry {
 // collided would leave three node types registered from a pack the user was
 // told had failed, and the workflow that then used one of them would work until
 // the day it did not.
-func (r *Registry) Install(p *Pack) error {
+func (r *Registry) Install(p *Pack) error { return r.install(p, false) }
+
+// InstallBuiltin installs the host's own bundled pack: the one pack that is
+// allowed to define the reserved node types, because it is the pack they were
+// reserved for. Everything installed after it is an ordinary pack and may not
+// take any name this one took.
+//
+// It is a separate method rather than a flag on the pack, so that "this is the
+// pack that ships inside the binary" is a decision the host makes at the call
+// site and not something a manifest on disk can claim about itself.
+func (r *Registry) InstallBuiltin(p *Pack) error { return r.install(p, true) }
+
+func (r *Registry) install(p *Pack, builtin bool) error {
 	if p == nil {
 		return fmt.Errorf("no pack to install")
 	}
@@ -47,10 +71,17 @@ func (r *Registry) Install(p *Pack) error {
 		// Checked again here and not only at load: a built-in added to the
 		// engine after a pack was written would otherwise be shadowed by a pack
 		// that loaded cleanly last week.
-		if contains(builtinNodeTypes, def.Type) {
+		if !builtin && contains(r.reserved, def.Type) {
 			return fmt.Errorf("pack %q defines %q, which is a built-in Zyvro node", p.Manifest.Name, def.Type)
 		}
 		if existing, ok := r.nodes[def.Type]; ok {
+			// A collision with the bundled pack is not a collision between two
+			// packs, it is an attempt to shadow a built-in, and saying so is
+			// what tells the user whether they have two packs to choose between
+			// or one pack to distrust.
+			if existing.Pack == r.builtin && r.builtin != "" {
+				return fmt.Errorf("pack %q defines %q, which is a built-in Zyvro node", p.Manifest.Name, def.Type)
+			}
 			return fmt.Errorf("pack %q defines %q, which pack %q already provides", p.Manifest.Name, def.Type, existing.Pack)
 		}
 	}
@@ -58,7 +89,30 @@ func (r *Registry) Install(p *Pack) error {
 		r.nodes[def.Type] = def
 	}
 	r.packs[p.Manifest.Name] = true
+	if builtin {
+		r.builtin = p.Manifest.Name
+	}
 	return nil
+}
+
+// Reserved returns the node types no pack may define, so a caller that loads a
+// pack itself can pass the registry's own list to Load rather than keeping a
+// second copy of it.
+func (r *Registry) Reserved() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return append([]string(nil), r.reserved...)
+}
+
+// IsBuiltin reports whether a node type came from the bundled pack. The palette
+// asks, because a node the engine ships is not a node to badge as a pack's, and
+// the replay cache asks, because the bundled pack's Lua is compiled into the
+// binary and changes only when the binary does.
+func (r *Registry) IsBuiltin(nodeType string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	def, ok := r.nodes[nodeType]
+	return ok && r.builtin != "" && def.Pack == r.builtin
 }
 
 // Kind returns a registered node type. The definition it returns is the live

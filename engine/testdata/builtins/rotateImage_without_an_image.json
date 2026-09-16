@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "A": {
+      "type": "text",
+      "value": {
+        "text": "x"
+      }
+    }
+  },
+  "error": "node B (rotateImage): rotate image needs an image input"
+}

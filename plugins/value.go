@@ -193,6 +193,14 @@ func luaString(t *lua.LTable, key string) string {
 	return ""
 }
 
+// luaBool reads a boolean field, treating a missing one as false. Only a real
+// Lua boolean counts: a node writing toolOnly = "yes" has made a mistake that
+// silently reading it as true would hide.
+func luaBool(t *lua.LTable, key string) bool {
+	b, ok := t.RawGetString(key).(lua.LBool)
+	return ok && bool(b)
+}
+
 // luaStringList reads a list-of-strings field, refusing anything that is not
 // one rather than skipping it: a node declaring inputs = {"text", 3} has a bug
 // its author should be told about.

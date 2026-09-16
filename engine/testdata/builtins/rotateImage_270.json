@@ -1,0 +1,24 @@
+{
+  "outputs": {
+    "A": {
+      "type": "image",
+      "value": {
+        "bytes": 98,
+        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAKUlEQVR4nGL5//8/AzbABGOgAxYGMNAMvAsTYbi+XhmfDtIlGEl2FWAAf8gJDkqVTQkAAAAASUVORK5CYII=",
+        "mimeType": "image/png"
+      }
+    },
+    "B": {
+      "type": "image",
+      "value": {
+        "bytes": 98,
+        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAKUlEQVR4nGL5//8/AzbABGOgAxYGMNAMvAsTYbi+XhmfDtIlGEl2FWAAf8gJDkqVTQkAAAAASUVORK5CYII=",
+        "mimeType": "image/png",
+        "url": "https://media.test/exec-fixed/B/rotated.png"
+      }
+    }
+  },
+  "media": [
+    "exec-fixed/B/rotated.png (image/png, 98 bytes)"
+  ]
+}

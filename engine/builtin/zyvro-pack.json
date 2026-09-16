@@ -1,0 +1,12 @@
+{
+  "name": "builtin",
+  "version": "1.0.0",
+  "description": "The nodes Zyvro ships with. Read one to see what a node is; copy one to start your own.",
+  "author": "Zyvro",
+  "capabilities": [
+    "llm",
+    "image",
+    "vision",
+    "agent"
+  ]
+}

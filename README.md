@@ -42,7 +42,9 @@ machine.
 
 Node types are not a fixed list. A pack is a directory of `.lua` files and a
 manifest, and its nodes appear in the palette and resolve by name like any
-built-in.
+built-in — because the built-ins are the same thing. Almost every node the
+engine ships is a `.lua` file in a pack embedded in the binary (`engine/builtin`),
+so the way to learn what a node is, is to read one.
 
 ```lua
 return {
@@ -78,10 +80,24 @@ wasted model quota, and wrong output:
   functions whose replace step is quadratic.
 - The registry bounds the Lua stack, not the Go heap, so a sampling watchdog
   bounds the heap separately and forces a collection before concluding.
-- Model calls are counted against a per-run budget.
-- File access exists on the node's context only when the pack declared the
-  capability, and routes through the same gate the built-in file nodes use:
-  symlinks resolved, nothing outside the project root, nothing inside `.zyvro/`.
+- Every call that spends the user's provider account is counted against one
+  per-run budget, whichever capability made it.
+- A host function exists on the node's context only when the pack declared the
+  matching capability, and is absent rather than present-and-failing, so a pack
+  cannot probe for what it was not given. There are five:
+
+  | capability | what it grants |
+  | --- | --- |
+  | `llm` | one text completion at a time |
+  | `files` | the project folder, through the same gate the built-in file nodes use: symlinks resolved, nothing outside the project root, nothing inside `.zyvro/` |
+  | `image` | the host generating, editing, matting, turning or composing an image — none of the pixel work happens in Lua |
+  | `vision` | sending images to a model and getting words back |
+  | `agent` | the Brain loop, which executes other nodes of the graph as tools |
+
+  The privileged work stays in Go behind these. Widening the sandbox so a pack
+  could do it itself would have handed every pack installed from a store the
+  network and the image decoders, which is the opposite of what the sandbox is
+  for.
 
 ## The local daemon
 

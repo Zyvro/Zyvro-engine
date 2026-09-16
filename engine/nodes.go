@@ -11,10 +11,14 @@ import (
 // It used to live in the frontend, as a literal the desktop app carried with
 // it. That stopped being possible the moment a project could install packs,
 // because half the palette then only exists on the machine running the engine.
-// So the whole set is declared here instead, built-ins included, and the app
-// asks the engine it is talking to what that engine can run. A built-in missing
-// from this file is a built-in the builder cannot place, which is why the tests
-// next door hold it against the switch in executeWithInput.
+// So the whole set is declared by the engine instead, built-ins included, and
+// the app asks the engine it is talking to what that engine can run.
+//
+// Most of it is no longer declared in this file. A node that ships as Lua
+// describes itself — its label, its ports and its settings sit in the same file
+// as its behaviour, which is the shape a node in a store has to have — and
+// Catalogue reads those off the registry. What is left here is the handful the
+// engine still runs in Go.
 
 // NodeKind is one entry in the palette. The JSON tags are the frontend's
 // NodeKind type field for field (see Zyvro-frontend/src/lib/nodes.ts), so the
@@ -44,12 +48,17 @@ type NodeKind struct {
 	Pack string `json:"pack,omitempty"`
 }
 
-// builtinKinds is the palette entry for every node the engine implements in Go.
+// builtinKinds is the palette entry for every node the engine still implements
+// in Go: the input nodes that read the run's inputs, the file nodes that reach
+// the project folder, and the two that hand their value straight on.
 //
-// It is deliberately not derived from the switch in executeWithInput: a switch
-// case knows how to run a node, not what to call it or what it takes, and
-// generating one from the other would only mean the two could never disagree
-// out loud. They are checked against each other in a test instead.
+// Everything else the engine ships is a Lua file in the bundled pack and
+// describes itself — its label, its ports and its settings are in the same file
+// as its behaviour, which is the shape a node in a store has to have. This list
+// is what is left, and it is deliberately not derived from the switch in
+// executeWithInput: a switch case knows how to run a node, not what to call it,
+// and generating one from the other would only mean the two could never
+// disagree out loud. They are checked against each other in a test instead.
 var builtinKinds = []NodeKind{
 	{
 		Type:        "textInput",
@@ -92,93 +101,6 @@ var builtinKinds = []NodeKind{
 		Defaults: map[string]any{"separator": "\\n"},
 	},
 	{
-		Type:        "llm",
-		Label:       "LLM",
-		Category:    "AI",
-		Description: "Text completion via Ollama, Claude or OpenAI",
-		Inputs:      []string{"text"},
-		Outputs:     []string{"text"},
-		Defaults: map[string]any{
-			"system": "", "prompt": "", "temperature": 0.7,
-			"maxTokens": 2000, "provider": "", "model": "",
-		},
-	},
-	{
-		Type:        "generateImage",
-		Label:       "Generate Image",
-		Category:    "AI",
-		Description: "Text -> image via Gemini",
-		Inputs:      []string{"text", "image"},
-		Outputs:     []string{"image"},
-		Defaults:    map[string]any{"prompt": "", "aspectRatio": "1:1"},
-	},
-	{
-		Type:        "editImage",
-		Label:       "Edit Image",
-		Category:    "AI",
-		Description: "Edit an image with a prompt",
-		Inputs:      []string{"image", "text"},
-		Outputs:     []string{"image"},
-		Defaults:    map[string]any{"prompt": ""},
-	},
-	{
-		Type:        "removeBackground",
-		Label:       "Remove Background",
-		Category:    "AI",
-		Description: "AI two-pass matte, or programmatic color-range removal",
-		Inputs:      []string{"image"},
-		Outputs:     []string{"image"},
-		Defaults:    map[string]any{"mode": "ai", "tolerance": 30},
-	},
-	{
-		Type:        "rotateImage",
-		Label:       "Rotate Image",
-		Category:    "Utility",
-		Description: "Rotate an image by 90-degree steps",
-		Inputs:      []string{"image"},
-		Outputs:     []string{"image"},
-		Defaults:    map[string]any{"degrees": 90},
-	},
-	{
-		Type:        "flipImage",
-		Label:       "Flip Image",
-		Category:    "Utility",
-		Description: "Mirror an image horizontally or vertically",
-		Inputs:      []string{"image"},
-		Outputs:     []string{"image"},
-		Defaults:    map[string]any{"axis": "h"},
-	},
-	{
-		Type:        "vision",
-		Label:       "Vision / Judge",
-		Category:    "AI",
-		Description: "Analyze image(s) with a VLM",
-		Inputs:      []string{"image", "text"},
-		Outputs:     []string{"text"},
-		Defaults:    map[string]any{"instruction": ""},
-	},
-	{
-		Type:        "brain",
-		Label:       "Brain",
-		Category:    "Agent",
-		Description: "Agent that calls connected nodes as tools",
-		Inputs:      []string{"text"},
-		Outputs:     []string{"text"},
-		Defaults: map[string]any{
-			"goal": "", "system": "", "maxSteps": 6, "provider": "", "model": "",
-		},
-	},
-	{
-		Type:        "zyvroTools",
-		Label:       "Workflow Tools",
-		Category:    "Agent",
-		Description: "Gives a Brain the MCP tools: list, inspect and run your other workflows",
-		Inputs:      []string{},
-		Outputs:     []string{},
-		Defaults:    map[string]any{},
-		ToolOnly:    true,
-	},
-	{
 		Type:        "preview",
 		Label:       "Preview",
 		Category:    "Output",
@@ -186,15 +108,6 @@ var builtinKinds = []NodeKind{
 		Inputs:      []string{"any"},
 		Outputs:     []string{},
 		Defaults:    map[string]any{},
-	},
-	{
-		Type:        "voxelPreview",
-		Label:       "3D Voxel Preview",
-		Category:    "Output",
-		Description: "Cube or sphere textured with the connected images",
-		Inputs:      []string{"image", "image", "image", "image", "image", "image"},
-		Outputs:     []string{},
-		Defaults:    map[string]any{"shape": "cube"},
 	},
 	{
 		Type:        "fileOutput",
@@ -247,7 +160,10 @@ func BuiltinKinds() []NodeKind {
 func Catalogue(reg *plugins.Registry) []NodeKind {
 	out := BuiltinKinds()
 	if reg == nil {
-		return out
+		// A caller with no registry still gets the whole palette: most of it
+		// now lives in the bundled pack, and a host that never heard of packs
+		// must not end up offering seven nodes.
+		reg = defaultRegistry()
 	}
 	for _, def := range reg.Kinds() {
 		out = append(out, KindFromPluginNode(def))
@@ -265,7 +181,14 @@ func KindFromPluginNode(def plugins.NodeDef) NodeKind {
 		Inputs:      append([]string{}, def.Inputs...),
 		Outputs:     append([]string{}, def.Outputs...),
 		Defaults:    map[string]any{},
+		ToolOnly:    def.ToolOnly,
 		Pack:        def.Pack,
+	}
+	// The bundled pack is not a pack as far as anybody looking at the palette
+	// is concerned: the badge exists so that a node behaving oddly can be seen
+	// at a glance not to have come from us, and these did.
+	if k.Pack == BuiltinPackName {
+		k.Pack = ""
 	}
 	// A pack describes its settings as form fields; the palette wants the
 	// starting config those fields would produce. A field with no default still
@@ -299,14 +222,40 @@ func defaultForField(f plugins.ConfigField) any {
 	}
 }
 
-// BuiltinNodeTypes returns the types the engine implements itself, sorted. It
-// is the palette plus the disabled cases: both are names a pack may not take.
+// BuiltinNodeTypes returns the node types the engine implements in Go, sorted.
+// It is the palette above plus the disabled cases, and it is what a pack may
+// not take: it is handed to plugins.NewRegistry and to plugins.Load, which is
+// the whole of how that package learns what the names are.
+//
+// The bundled pack's own types are not in it, and do not need to be. That pack
+// is installed into the registry first, so a later pack claiming one of its
+// names collides with it and is refused by name.
 func BuiltinNodeTypes() []string {
 	out := make([]string, 0, len(builtinKinds)+len(disabledNodeTypes))
 	for _, k := range builtinKinds {
 		out = append(out, k.Type)
 	}
 	out = append(out, disabledNodeTypes...)
+	sort.Strings(out)
+	return out
+}
+
+// ReservedNodeTypes is every name a pack may not take: the ones above, and the
+// ones the bundled pack defines.
+//
+// It is one list because there is one question. A pack calling itself "llm"
+// and a pack calling itself "textInput" are the same attempt — every workflow
+// already using that node would start running the pack's code — and the fact
+// that one of those names is a Go switch case and the other a Lua file in the
+// binary is an implementation detail the person installing the pack should
+// never have to know. Both are refused, at load, by name.
+func ReservedNodeTypes() []string {
+	out := BuiltinNodeTypes()
+	if pack, err := BuiltinPack(); err == nil {
+		for _, def := range pack.Nodes {
+			out = append(out, def.Type)
+		}
+	}
 	sort.Strings(out)
 	return out
 }

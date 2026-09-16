@@ -51,20 +51,27 @@ const localOnlyMessage = "this node reads and writes files in your project folde
 // and neither side of that is hashed: replaying a write skips the write, so
 // deleting the output and running again would silently produce nothing, and
 // replaying a read returns the contents the file had last time even after it
-// changed on disk. A plugin node is the same problem one step further out — its
-// behaviour is Lua in a pack, and not one byte of that script is in the
-// fingerprint, so editing a node's code and running again would replay the old
-// answer forever. Both are wrong in the same way, which is why they are one
-// question here rather than two checks at the call site.
+// changed on disk. An installed pack's node is the same problem one step
+// further out — its behaviour is Lua in a folder the user can edit, and not one
+// byte of that script is in the fingerprint, so editing a node's code and
+// running again would replay the old answer forever. Both are wrong in the same
+// way, which is why they are one question here rather than two checks at the
+// call site.
+//
+// The bundled pack is the exception, and it has to be: nearly every node worth
+// caching now lives in it, and an llm node that could not be replayed would
+// mean the cache had quietly stopped existing. Its Lua is compiled into the
+// binary, so it changes when the binary changes and never between two runs of
+// the same one — which is exactly the property the Go switch had.
 func (r *Runtime) outsideTheFingerprint(nodeType string) bool {
 	for _, t := range LocalOnlyNodeTypes {
 		if t == nodeType {
 			return true
 		}
 	}
-	if r.Plugins != nil {
-		if _, ok := r.Plugins.Kind(nodeType); ok {
-			return true
+	if reg := r.registry(); reg != nil {
+		if _, ok := reg.Kind(nodeType); ok {
+			return !reg.IsBuiltin(nodeType)
 		}
 	}
 	return false

@@ -1,0 +1,30 @@
+{
+  "outputs": {
+    "A": {
+      "type": "image",
+      "value": {
+        "bytes": 98,
+        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAKUlEQVR4nGL5//8/AzbABGOgAxYGMNAMvAsTYbi+XhmfDtIlGEl2FWAAf8gJDkqVTQkAAAAASUVORK5CYII=",
+        "mimeType": "image/png"
+      }
+    },
+    "B": {
+      "type": "image",
+      "value": {
+        "bytes": 98,
+        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAKUlEQVR4nGLRCLjDgA0wwRjogIUBDLbc8IGJMPhobMGng3QJRpJdBRgA6+gFvEiIZs4AAAAASUVORK5CYII=",
+        "mimeType": "image/png",
+        "url": "https://media.test/exec-fixed/B/edit.png"
+      }
+    },
+    "P": {
+      "type": "text",
+      "value": {
+        "text": "add a hat"
+      }
+    }
+  },
+  "media": [
+    "exec-fixed/B/edit.png (image/png, 98 bytes)"
+  ]
+}

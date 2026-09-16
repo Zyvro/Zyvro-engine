@@ -19,8 +19,23 @@ import (
 
 const brainMaxStepsDefault = 6
 
+// brainMaxStepsCeiling bounds one Brain run however many steps it was asked for.
+//
+// It exists because of the agent capability. A Brain's step count used to come
+// only from a node's config, which a person set in the builder and could see;
+// it now also arrives from a Lua node, where nobody sees it, and one ctx.brain
+// call costs one unit of the model budget no matter how many turns it takes. A
+// pack asking for a million steps would be asking for a million model calls
+// against a budget of eight, and the run deadline is the only other thing in its
+// way. Fifty is far past what any real agent needs and far short of a bill.
+const brainMaxStepsCeiling = 50
+
+// runBrain is the Go behind ctx.brain, the agent capability's one function. It
+// reads the settings the bundled pack's brain.lua passed, which the bridge has
+// already run the placeholder resolver over; the goal arriving on an input has
+// not been, so that one still is.
 func (r *Runtime) runBrain(ctx context.Context, in *RunInput) (*NodeOutput, error) {
-	goal := r.resolveInputs(str(in.Config["goal"]))
+	goal := str(in.Config["goal"])
 	if goal == "" {
 		if t := firstUpstream(in.Upstream, "text"); t != nil {
 			goal = r.resolveInputs(str(t.Value["text"]))
@@ -29,8 +44,11 @@ func (r *Runtime) runBrain(ctx context.Context, in *RunInput) (*NodeOutput, erro
 	if goal == "" {
 		return nil, fmt.Errorf("brain node needs a goal")
 	}
-	system := r.resolveInputs(strDefault(in.Config["system"], "You are a visual AI agent. Use the available tools to accomplish the goal. When the goal is achieved, give your final answer describing the result."))
+	system := strDefault(in.Config["system"], "You are a visual AI agent. Use the available tools to accomplish the goal. When the goal is achieved, give your final answer describing the result.")
 	maxSteps := int(num(in.Config["maxSteps"], brainMaxStepsDefault))
+	if maxSteps > brainMaxStepsCeiling {
+		maxSteps = brainMaxStepsCeiling
+	}
 
 	toolNodeIDs := ToolNodesOf(r.Graph, in.Node.ID)
 	if len(toolNodeIDs) == 0 {

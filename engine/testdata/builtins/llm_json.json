@@ -1,0 +1,28 @@
+{
+  "outputs": {
+    "A": {
+      "type": "json",
+      "value": {
+        "data": {
+          "items": [
+            1,
+            2
+          ],
+          "ok": true
+        }
+      }
+    },
+    "B": {
+      "type": "json",
+      "value": {
+        "data": {
+          "items": [
+            1,
+            2
+          ],
+          "ok": true
+        }
+      }
+    }
+  }
+}

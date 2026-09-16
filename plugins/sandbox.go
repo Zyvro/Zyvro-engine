@@ -1,8 +1,9 @@
 // Package plugins runs user-authored workflow nodes written in Lua.
 //
-// The node types the engine ships with are Go functions in a switch, which
-// means a new node is a release. A pack is the other half of that: a directory
-// of Lua files someone installs from a store, so a new node is a download.
+// A pack is a directory of Lua files someone installs from a store, so a new
+// node is a download rather than a release. The node types the engine ships
+// with are a pack too — one embedded in the binary — which is what makes a
+// built-in something a person can read and fork rather than invisible Go.
 //
 // That download is the whole problem this package exists to solve. Execution is
 // local, but local is not trusted: the author of a pack is a stranger, and the
@@ -49,10 +50,14 @@ type Limits struct {
 	// MaxLogBytes caps what print and ctx.log may accumulate in one run. A log
 	// nobody bounded is a memory leak with a friendly name.
 	MaxLogBytes int
-	// MaxLLMCalls is how many times one node execution may call ctx.llm. This
-	// is the user's own account, so the budget is small and the refusal past it
-	// names the number. Zero means the default; a negative value is how the
-	// pack loader says "none at all".
+	// MaxLLMCalls is how many calls one node execution may make that spend the
+	// user's own provider account: ctx.llm, and every host function behind it
+	// that reaches a model — generating an image, editing one, removing a
+	// background, describing one, running the agent loop. They share this one
+	// budget because they share one bill, and an image call is the expensive
+	// end of it. The budget is small and the refusal past it names the number.
+	// Zero means the default; a negative value is how the pack loader says
+	// "none at all".
 	MaxLLMCalls int
 	// MaxStringBytes caps what one guarded string function may produce in a
 	// single call. string.rep and string.format can turn three tokens of source

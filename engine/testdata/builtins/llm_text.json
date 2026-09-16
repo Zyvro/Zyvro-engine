@@ -1,0 +1,16 @@
+{
+  "outputs": {
+    "A": {
+      "type": "text",
+      "value": {
+        "text": "the upstream prompt"
+      }
+    },
+    "B": {
+      "type": "text",
+      "value": {
+        "text": "a short answer"
+      }
+    }
+  }
+}

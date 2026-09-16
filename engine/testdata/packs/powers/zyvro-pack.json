@@ -1,0 +1,13 @@
+{
+  "name": "powers",
+  "version": "0.1.0",
+  "description": "A pack that asks for everything, so a test can see what declaring a capability actually hands over.",
+  "author": "Zyvro",
+  "capabilities": [
+    "llm",
+    "files",
+    "image",
+    "vision",
+    "agent"
+  ]
+}

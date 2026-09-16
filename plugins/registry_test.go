@@ -16,7 +16,7 @@ func twoNodePack(t *testing.T, name string) *Pack {
 }
 
 func TestInstallAndLookUp(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry(testReserved)
 	if err := r.Install(twoNodePack(t, "pack-one")); err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestInstallAndLookUp(t *testing.T) {
 // TestKindsAreStablyOrdered: the palette must not rearrange itself between
 // launches, and Go map iteration is deliberately randomised.
 func TestKindsAreStablyOrdered(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry(testReserved)
 	if err := r.Install(twoNodePack(t, "pack-one")); err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestKindsAreStablyOrdered(t *testing.T) {
 // TestKindsReturnsCopies: a caller rendering the palette must not be able to
 // reach into a registered definition.
 func TestKindsReturnsCopies(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry(testReserved)
 	if err := r.Install(twoNodePack(t, "pack-one")); err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestKindsReturnsCopies(t *testing.T) {
 }
 
 func TestInstallRejectsADuplicateType(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry(testReserved)
 	if err := r.Install(twoNodePack(t, "pack-one")); err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestInstallRejectsADuplicateType(t *testing.T) {
 }
 
 func TestInstallRejectsTheSamePackTwice(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry(testReserved)
 	if err := r.Install(twoNodePack(t, "pack-one")); err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestInstallRejectsTheSamePackTwice(t *testing.T) {
 // TestInstallIsAllOrNothing. A pack half-installed because its second node
 // collided leaves one type registered from a pack the user was told had failed.
 func TestInstallIsAllOrNothing(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry(testReserved)
 	first := loadOK(t, `{"name":"first","version":"1.0.0"}`, map[string]string{
 		"zeta.lua": `return { type = "zeta", outputs = { "text" }, run = function() return { text = "z" } end }`,
 	})
@@ -119,7 +119,7 @@ func TestInstallRejectsABuiltinType(t *testing.T) {
 	})
 	p.Nodes[0].Type = "llm" // as if "llm" became a built-in after this pack shipped
 
-	r := NewRegistry()
+	r := NewRegistry(testReserved)
 	err := r.Install(p)
 	if err == nil {
 		t.Fatal("a pack shadowing a built-in was installed")
@@ -130,7 +130,7 @@ func TestInstallRejectsABuiltinType(t *testing.T) {
 }
 
 func TestRunRejectsAnUnknownType(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry(testReserved)
 	_, err := r.Run(context.Background(), "ghost", HostInput{})
 	if err == nil || !strings.Contains(err.Error(), "ghost") {
 		t.Fatalf("expected an unknown-type error naming it, got: %v", err)
@@ -138,26 +138,75 @@ func TestRunRejectsAnUnknownType(t *testing.T) {
 }
 
 func TestInstallRejectsNil(t *testing.T) {
-	if err := NewRegistry().Install(nil); err == nil {
+	if err := NewRegistry(testReserved).Install(nil); err == nil {
 		t.Fatal("a nil pack installed")
 	}
 }
 
-// TestBuiltinListMatchesTheEngine is a reminder rather than a check: this
-// package cannot import engine, so the list is duplicated and nothing but a
-// person keeps it in step. If a built-in is added to
-// engine.Runtime.executeWithInput, add it here too.
-func TestBuiltinListMatchesTheEngine(t *testing.T) {
-	for _, typ := range builtinNodeTypes {
+// TestAReservedNameCouldActuallyCollide. A reserved name that no node type
+// could ever be named is a guard that refuses nothing, and the list now comes
+// from another package, so the shape of what arrives is worth checking once.
+func TestAReservedNameCouldActuallyCollide(t *testing.T) {
+	for _, typ := range testReserved {
 		if !nodeTypeRE.MatchString(typ) {
-			t.Fatalf("built-in %q does not match the node type pattern, so no pack could ever collide with it "+
+			t.Fatalf("reserved name %q does not match the node type pattern, so no pack could ever collide with it "+
 				"and the guard would be silently useless", typ)
 		}
 	}
-	for i := 1; i < len(builtinNodeTypes); i++ {
-		if builtinNodeTypes[i-1] >= builtinNodeTypes[i] {
-			t.Fatalf("builtinNodeTypes is not sorted at %q: keep it sorted so additions are easy to see",
-				builtinNodeTypes[i])
-		}
+}
+
+// TestReservedIsACopy: a registry hands its reserved list to whoever loads a
+// pack for it, and a caller that could edit it could un-reserve "llm".
+func TestReservedIsACopy(t *testing.T) {
+	r := NewRegistry(testReserved)
+	got := r.Reserved()
+	if len(got) == 0 {
+		t.Fatal("a registry built with reserved names reports none")
+	}
+	got[0] = "harmless"
+	if r.Reserved()[0] == "harmless" {
+		t.Fatal("a caller rewrote a registry's reserved list")
+	}
+	// And the slice the caller passed in is not the one held either.
+	mutable := append([]string(nil), testReserved...)
+	r2 := NewRegistry(mutable)
+	mutable[0] = "harmless"
+	if r2.Reserved()[0] == "harmless" {
+		t.Fatal("a registry kept the caller's slice, so the caller can still edit it")
+	}
+}
+
+// TestInstallBuiltinMayTakeTheReservedNames: they are reserved for it. It is
+// the one pack loaded and installed that way, and the host decides which pack
+// that is at the call site rather than a manifest claiming it.
+func TestInstallBuiltinMayTakeTheReservedNames(t *testing.T) {
+	p := loadOK(t, `{"name":"bundled","version":"1.0.0"}`, map[string]string{
+		"a.lua": `return { type = "harmless", outputs = { "text" }, run = function() return { text = "x" } end }`,
+	})
+	p.Nodes[0].Type = "llm"
+
+	r := NewRegistry(testReserved)
+	if err := r.InstallBuiltin(p); err != nil {
+		t.Fatalf("the bundled pack was refused its own reserved name: %v", err)
+	}
+	if !r.IsBuiltin("llm") {
+		t.Fatal("a node from the bundled pack does not report as built-in")
+	}
+
+	// And now nothing else may have it, with a message about a built-in rather
+	// than about some other pack the user has never heard of.
+	other := loadOK(t, `{"name":"sneak","version":"1.0.0"}`, map[string]string{
+		"a.lua": `return { type = "alsoharmless", outputs = { "text" }, run = function() return { text = "x" } end }`,
+	})
+	other.Nodes[0].Type = "llm"
+	err := r.Install(other)
+	if err == nil {
+		t.Fatal("a pack shadowed a bundled node")
+	}
+	if !strings.Contains(err.Error(), "built-in") {
+		t.Fatalf("error did not say it was a built-in: %v", err)
+	}
+	if r.IsBuiltin("nothingLikeThat") {
+		t.Fatal("an unregistered type reports as built-in")
 	}
 }

@@ -55,7 +55,11 @@ func (d *daemon) loadPacks() []packInfo {
 }
 
 func loadPacksFrom(dir string) (*plugins.Registry, []packInfo) {
-	reg := plugins.NewRegistry()
+	// engine.NewRegistry rather than plugins.NewRegistry: the engine is the
+	// only thing that knows which node types it implements itself, and it is
+	// where the bundled pack lives. What comes back already holds every
+	// built-in, so a project with no packs directory is still a full palette.
+	reg := engine.NewRegistry()
 	infos := []packInfo{}
 
 	entries, err := os.ReadDir(dir)
@@ -90,7 +94,9 @@ func loadOnePack(reg *plugins.Registry, dir, folder string) packInfo {
 	// lives is the only name it has left.
 	info := packInfo{Name: folder, Dir: dir, Capabilities: []string{}, NodeTypes: []string{}}
 
-	pack, err := plugins.Load(dir)
+	// The reserved names come from the registry the pack is about to join, so
+	// there is no second list here to fall out of step with the first.
+	pack, err := plugins.Load(dir, reg.Reserved())
 	if err != nil {
 		info.Error = err.Error()
 		log.Printf("packs: %s was refused: %v", folder, err)

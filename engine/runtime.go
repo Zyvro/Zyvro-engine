@@ -55,10 +55,13 @@ type Runtime struct {
 	// there (see files.go).
 	Files FileAccess
 
-	// Plugins holds the node types the installed packs contribute. A type the
+	// Plugins holds the node types this host can run: the bundled pack the
+	// engine ships, and whatever the project installed on top of it. A type the
 	// switch in executeWithInput has no case for is looked up here before the
-	// run is failed, so a pack's node runs exactly like a built-in. Nil means
-	// no packs are installed, and every unknown type is then simply unknown.
+	// run is failed, which is how a pack's node runs exactly like a built-in —
+	// and, now, how a built-in runs at all. Nil falls back to a registry holding
+	// the bundled pack alone, so a caller that never heard of packs still has
+	// every node the engine ships. Build one with NewRegistry.
 	Plugins *plugins.Registry
 	// PluginLimits is the budget one plugin node runs under. The zero value
 	// means plugins.DefaultLimits(), and every field is overridable
@@ -205,6 +208,34 @@ func (r *Runtime) ExecuteNode(ctx context.Context, n *GraphNode) (*NodeOutput, e
 
 // executeWithInput dispatches a node execution with pre-resolved inputs.
 // Used both by the DAG loop and by the Brain when invoking tool nodes.
+//
+// What is left here is what could not be Lua, and each one is here for a reason
+// that is about the host rather than about the node:
+//
+//   - textInput and imageInput read the run's inputs, keyed by the node's own
+//     input key, id or label. That map is the caller's, not the graph's, and a
+//     node that could reach it could read every value a run was started with.
+//   - fileInput and fileOutput are the project folder, through a path gate with
+//     rules about symlinks and .zyvro that exist in exactly one place. The
+//     sandbox's file capability is narrower than these nodes are — it reads
+//     text, where fileInput decides between text, JSON and an image and refuses
+//     binary that merely decodes — so expressing them in Lua would have meant
+//     widening the gate rather than using it.
+//   - preview and output hand their input straight back, the same pointer with
+//     every key it arrived with. A value that crossed into Lua and back would
+//     come back as much of itself as the conversion could carry, which is not
+//     the same thing: savedPath, trace and faces would all be gone.
+//   - mergeText joins the whole upstream list, and encodes anything that is not
+//     text as the JSON of its raw node value. A Lua version would need every
+//     upstream value rather than the first, un-narrowed, plus a JSON encoder —
+//     three additions to the host API for a node whose behaviour is a join.
+//   - generateVideo refuses to run. It is deliberately absent from the palette,
+//     and a Lua file for it would put it back: a node nobody can place is
+//     better than one that can be placed and then fails, but an old workflow
+//     that has one still deserves the real explanation.
+//
+// Everything else is a Lua file in the bundled pack, and reaches this function
+// through its default case.
 func (r *Runtime) executeWithInput(ctx context.Context, in *RunInput) (*NodeOutput, error) {
 	switch in.Node.Type {
 	case "textInput":
@@ -215,24 +246,8 @@ func (r *Runtime) executeWithInput(ctx context.Context, in *RunInput) (*NodeOutp
 		return r.runFileInput(in)
 	case "fileOutput":
 		return r.runFileOutput(in)
-	case "llm":
-		return r.runLLM(ctx, in)
-	case "generateImage":
-		return r.runGenerateImage(ctx, in)
-	case "editImage":
-		return r.runEditImage(ctx, in)
-	case "removeBackground":
-		return r.runRemoveBackground(ctx, in)
-	case "rotateImage":
-		return r.runRotateImage(in)
-	case "flipImage":
-		return r.runFlipImage(in)
-	case "vision":
-		return r.runVision(ctx, in)
 	case "mergeText":
 		return r.runMergeText(in)
-	case "voxelPreview":
-		return r.runVoxelPreview(in)
 	case "preview", "output":
 		var o *NodeOutput
 		for _, u := range in.Upstream {
@@ -245,23 +260,12 @@ func (r *Runtime) executeWithInput(ctx context.Context, in *RunInput) (*NodeOutp
 			return nil, fmt.Errorf("%s node has no input", in.Node.Type)
 		}
 		return o, nil
-	case "brain":
-		return r.runBrain(ctx, in)
-	case "zyvroTools":
-		// Tool-only node: it does nothing in the data flow, the Brain binds
-		// its tools through the tool edge.
-		names := []string{}
-		if r.External != nil {
-			for _, t := range r.External.Schemas() {
-				names = append(names, t.Name)
-			}
-		}
-		return jsonOutput(map[string]any{"tools": names}), nil
 	case "generateVideo":
 		return nil, fmt.Errorf("video generation is disabled in this build")
 	default:
-		// Not one of ours. A pack may still provide it, and only once the
-		// registry has no such type either is the graph actually wrong.
+		// One of the bundled pack's nodes, or one an installed pack
+		// contributed, and by this point the two run the same way. Only once
+		// the registry has no such type either is the graph actually wrong.
 		return r.runPluginNode(ctx, in)
 	}
 }
@@ -432,11 +436,31 @@ func (r *Runtime) runVoxelPreview(in *RunInput) (*NodeOutput, error) {
 	}, nil
 }
 
+// runHostTools is the zyvroTools node: it does nothing in the data flow, and
+// the Brain binds the host's tools through the tool edge. What it produces is
+// the list of names that were bound, so that a node with no ports still tells
+// somebody looking at it what it did.
+func (r *Runtime) runHostTools(_ *RunInput) (*NodeOutput, error) {
+	names := []string{}
+	if r.External != nil {
+		for _, t := range r.External.Schemas() {
+			names = append(names, t.Name)
+		}
+	}
+	return jsonOutput(map[string]any{"tools": names}), nil
+}
+
 // ---------- AI nodes ----------
 
+// The AI implementations below are no longer reached from the switch. Each is
+// the Go behind one host function, called by the bundled pack's Lua node of the
+// same name, and the settings they read are the ones that node passed. Those
+// have already been through the placeholder resolver on their way into the
+// script, which is why nothing here resolves a config value a second time; the
+// text arriving on an input has not, so that is still resolved where it is read.
 func (r *Runtime) runLLM(ctx context.Context, in *RunInput) (*NodeOutput, error) {
-	system := r.resolveInputs(str(in.Config["system"]))
-	prompt := r.resolveInputs(str(in.Config["prompt"]))
+	system := str(in.Config["system"])
+	prompt := str(in.Config["prompt"])
 	if prompt == "" {
 		if t := firstUpstream(in.Upstream, "text"); t != nil {
 			prompt = r.resolveInputs(str(t.Value["text"]))
@@ -488,7 +512,7 @@ func extractJSON(s string) any {
 }
 
 func (r *Runtime) runGenerateImage(ctx context.Context, in *RunInput) (*NodeOutput, error) {
-	prompt := r.resolveInputs(str(in.Config["prompt"]))
+	prompt := str(in.Config["prompt"])
 	if prompt == "" {
 		if t := firstUpstream(in.Upstream, "text"); t != nil {
 			prompt = r.resolveInputs(str(t.Value["text"]))
@@ -553,7 +577,7 @@ func (r *Runtime) runEditImage(ctx context.Context, in *RunInput) (*NodeOutput, 
 	if err != nil || data == nil {
 		return nil, fmt.Errorf("edit image source invalid: %w", err)
 	}
-	prompt := r.resolveInputs(str(in.Config["prompt"]))
+	prompt := str(in.Config["prompt"])
 	if prompt == "" {
 		if t := firstUpstream(in.Upstream, "text"); t != nil {
 			prompt = str(t.Value["text"])
@@ -734,7 +758,7 @@ func (r *Runtime) runFlipImage(in *RunInput) (*NodeOutput, error) {
 }
 
 func (r *Runtime) runVision(ctx context.Context, in *RunInput) (*NodeOutput, error) {
-	instruction := r.resolveInputs(str(in.Config["instruction"]))
+	instruction := str(in.Config["instruction"])
 	if instruction == "" {
 		if t := firstUpstream(in.Upstream, "text"); t != nil {
 			instruction = str(t.Value["text"])

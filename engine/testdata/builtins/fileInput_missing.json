@@ -1,0 +1,3 @@
+{
+  "error": "node A (fileInput): cannot read nope.txt: no such file in the project folder"
+}

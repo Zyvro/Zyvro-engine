@@ -1,0 +1,49 @@
+{
+  "outputs": {
+    "A": {
+      "type": "text",
+      "value": {
+        "text": "draw something"
+      }
+    },
+    "B": {
+      "type": "text",
+      "value": {
+        "imageDataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAKUlEQVR4nGLRCLjDgA0wwRjogIUBDLbc8IGJMPhobMGng3QJRpJdBRgA6+gFvEiIZs4AAAAASUVORK5CYII=",
+        "text": "Here is the square.",
+        "trace": [
+          {
+            "step": 1,
+            "tool": "generateImage",
+            "summary": "a blue square",
+            "status": "success"
+          },
+          {
+            "step": 2,
+            "tool": "final_answer",
+            "summary": "Here is the square.",
+            "status": "success"
+          }
+        ],
+        "url": "https://media.test/exec-fixed/T/image.png"
+      }
+    }
+  },
+  "trace": [
+    {
+      "step": 1,
+      "tool": "generateImage",
+      "summary": "a blue square",
+      "status": "success"
+    },
+    {
+      "step": 2,
+      "tool": "final_answer",
+      "summary": "Here is the square.",
+      "status": "success"
+    }
+  ],
+  "media": [
+    "exec-fixed/T/image.png (image/png, 98 bytes)"
+  ]
+}

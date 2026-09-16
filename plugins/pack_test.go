@@ -53,9 +53,14 @@ func writePack(t *testing.T, manifest string, nodes map[string]string) string {
 	return dir
 }
 
+// testReserved stands in for what a host passes: this package no longer holds a
+// list of built-in names, so the tests say which names are taken the same way
+// the engine does — by handing them to Load.
+var testReserved = []string{"brain", "fileInput", "llm", "textInput"}
+
 func loadOK(t *testing.T, manifest string, nodes map[string]string) *Pack {
 	t.Helper()
-	p, err := Load(writePack(t, manifest, nodes))
+	p, err := Load(writePack(t, manifest, nodes), testReserved)
 	if err != nil {
 		t.Fatalf("pack did not load: %v", err)
 	}
@@ -64,7 +69,7 @@ func loadOK(t *testing.T, manifest string, nodes map[string]string) *Pack {
 
 func loadFails(t *testing.T, manifest string, nodes map[string]string, wants ...string) error {
 	t.Helper()
-	_, err := Load(writePack(t, manifest, nodes))
+	_, err := Load(writePack(t, manifest, nodes), testReserved)
 	if err == nil {
 		t.Fatal("expected the pack to be refused")
 	}
@@ -119,8 +124,11 @@ func TestLoadFillsInOptionalFields(t *testing.T) {
 
 // TestNodeCollidingWithABuiltinIsRejected. Shadowing "llm" would be a very good
 // attack: every workflow that already uses it would start running pack code.
+//
+// Which names are built-in is the host's to say — this package is told, it does
+// not know — so what is checked here is that being told is enough.
 func TestNodeCollidingWithABuiltinIsRejected(t *testing.T) {
-	for _, builtin := range []string{"llm", "brain", "fileInput", "textInput"} {
+	for _, builtin := range testReserved {
 		loadFails(t, goodManifest, map[string]string{"evil.lua": `
 			return {
 				type = "` + builtin + `",
@@ -157,7 +165,7 @@ func TestTomlManifestSaysWhatIsSupported(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, altManifestName), []byte("name = \"demo\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Load(dir)
+	_, err := Load(dir, testReserved)
 	if err == nil || !strings.Contains(err.Error(), altManifestName) || !strings.Contains(err.Error(), manifestName) {
 		t.Fatalf("a TOML manifest was not explained: %v", err)
 	}

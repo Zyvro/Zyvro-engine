@@ -25,9 +25,11 @@ import (
 // depends on /tmp is a test that passes exactly once.
 func fixtureRegistry(t *testing.T, names ...string) *plugins.Registry {
 	t.Helper()
-	reg := plugins.NewRegistry()
+	// The engine's own constructor, so the fixtures sit next to the bundled
+	// pack exactly as an installed pack would.
+	reg := NewRegistry()
 	for _, name := range names {
-		pack, err := plugins.Load(filepath.Join("testdata", "packs", name))
+		pack, err := plugins.Load(filepath.Join("testdata", "packs", name), reg.Reserved())
 		if err != nil {
 			t.Fatalf("load pack %s: %v", name, err)
 		}
@@ -360,5 +362,228 @@ func TestPluginLogSurvivesAFailingNode(t *testing.T) {
 	// no reporter to push to.
 	if len(rt.PluginLogs["B"]) != 2 {
 		t.Errorf("PluginLogs = %v, want two lines", rt.PluginLogs["B"])
+	}
+}
+
+// ---------- the wider capabilities ----------
+
+// The three capabilities added when the built-ins became Lua — image, vision
+// and agent — exist so that the privileged work can stay in Go while the node
+// that asks for it is a file somebody can read. What makes that worth anything
+// is that a pack which did not ask does not get them, and the tests below are
+// that claim, checked from both sides of the boundary: the engine must not hand
+// the functions over, and the sandbox must not put them on ctx.
+
+// hostFunctionNames is every function a node's ctx can carry.
+var hostFunctionNames = []string{
+	"llm", "complete", "readFile", "writeFile",
+	"generateImage", "editImage", "removeBackground",
+	"rotateImage", "flipImage", "composeImages",
+	"vision", "brain", "agentTools",
+}
+
+func reportedFunctions(t *testing.T, nodeType string, packs ...string) map[string]any {
+	t.Helper()
+	gemini := newFakeGemini(t)
+	text := newScriptedOpenAI(t, assistantSays("never reached"))
+	cfg := &providers.Config{
+		TextProvider: "openai", OpenAIBaseURL: text.URL, OpenAIAPIKey: "test-key-not-a-real-one",
+		GeminiBaseURL: gemini.URL, GoogleAPIKey: "test-key-not-a-real-one",
+	}
+	rt := NewRuntime("exec1", thenPreview(nodeType, nil), cfg, nil, nil)
+	rt.Plugins = fixtureRegistry(t, packs...)
+	rt.Files = newFakeFiles()
+	if err := rt.Execute(context.Background()); err != nil {
+		t.Fatalf("execute %s: %v", nodeType, err)
+	}
+	data, ok := rt.Outputs["B"].Value["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s did not report a table: %+v", nodeType, rt.Outputs["B"])
+	}
+	return data
+}
+
+// TestAPackWithoutACapabilityHasNoneOfItsFunctions. Absent rather than
+// present-and-failing, for every one of them: a function that exists and
+// refuses lets a pack probe for the permission, branch on it, and behave when
+// it is being examined.
+func TestAPackWithoutACapabilityHasNoneOfItsFunctions(t *testing.T) {
+	got := reportedFunctions(t, "reportCapabilities", "probe")
+	for _, fn := range hostFunctionNames {
+		if got[fn] != false {
+			t.Errorf("ctx.%s was present for a pack that declared no capabilities", fn)
+		}
+	}
+}
+
+// TestDeclaringACapabilityIsWhatHandsTheFunctionsOver is the other half: a
+// guarantee that nothing is granted is worth nothing if nothing is ever
+// granted, and this is what says the gate is a gate rather than a wall.
+func TestDeclaringACapabilityIsWhatHandsTheFunctionsOver(t *testing.T) {
+	got := reportedFunctions(t, "reportEveryCapability", "powers")
+	for _, fn := range hostFunctionNames {
+		if got[fn] != true {
+			t.Errorf("ctx.%s was missing from a pack that declared every capability", fn)
+		}
+	}
+}
+
+// TestTheEngineDoesNotHandOverWhatAPackDidNotDeclare is the same question one
+// layer down, where it matters more: the sandbox checks the capability again
+// before it exposes a function, but a pack that did not declare one must not be
+// handed a live function at all, so that a bug in the far side of the boundary
+// has nothing to leak.
+func TestTheEngineDoesNotHandOverWhatAPackDidNotDeclare(t *testing.T) {
+	reg := fixtureRegistry(t, "probe", "powers")
+	rt := NewRuntime("exec1", &Graph{}, nil, nil, nil)
+	rt.Plugins = reg
+	rt.Files = newFakeFiles()
+
+	for _, tc := range []struct {
+		nodeType string
+		want     bool
+	}{
+		{"reportCapabilities", false}, // its pack declares nothing
+		{"reportEveryCapability", true},
+	} {
+		def, ok := reg.Kind(tc.nodeType)
+		if !ok {
+			t.Fatalf("%s is not registered", tc.nodeType)
+		}
+		host := rt.pluginHostInput(def, &RunInput{Node: &GraphNode{ID: "n", Type: tc.nodeType}, Config: map[string]any{}})
+		// Kept as a slice of typed pairs rather than a map[string]any: a nil
+		// func put into an interface is not a nil interface, so the obvious
+		// version of this loop would have reported every function as handed
+		// over and passed for the wrong reason.
+		for _, fn := range []struct {
+			name string
+			f    plugins.NodeFunc
+		}{
+			{"Image.Generate", host.Image.Generate},
+			{"Image.Edit", host.Image.Edit},
+			{"Image.RemoveBackground", host.Image.RemoveBackground},
+			{"Image.Rotate", host.Image.Rotate},
+			{"Image.Flip", host.Image.Flip},
+			{"Image.Compose", host.Image.Compose},
+			{"Vision.Describe", host.Vision.Describe},
+			{"Agent.Brain", host.Agent.Brain},
+			{"Agent.Tools", host.Agent.Tools},
+			{"Complete", host.Complete},
+		} {
+			if got := fn.f != nil; got != tc.want {
+				t.Errorf("%s: %s was handed over = %v, want %v", tc.nodeType, fn.name, got, tc.want)
+			}
+		}
+		if got := host.LLM != nil; got != tc.want {
+			t.Errorf("%s: an LLMFunc was handed over = %v, want %v", tc.nodeType, got, tc.want)
+		}
+		if got := host.Files != nil; got != tc.want {
+			t.Errorf("%s: a FileAccess was handed over = %v, want %v", tc.nodeType, got, tc.want)
+		}
+	}
+}
+
+// ---------- the budget ----------
+
+// budgetRun runs one node of the powers pack with a chosen number of allowed
+// provider calls, and reports how many actually reached a provider.
+func budgetRun(t *testing.T, nodeType string, allowed int) (geminiCalls, textCalls int, err error) {
+	t.Helper()
+	gemini := newFakeGemini(t)
+	text := newScriptedOpenAI(t, assistantSays("a model answer"))
+	cfg := &providers.Config{
+		TextProvider: "openai", OpenAIBaseURL: text.URL, OpenAIAPIKey: "test-key-not-a-real-one",
+		GeminiBaseURL: gemini.URL, GoogleAPIKey: "test-key-not-a-real-one",
+		ImageModel: "image-model", VisionModel: "vision-model",
+	}
+	graph := &Graph{
+		Nodes: []GraphNode{
+			imageSource("A", solidWithBorder(8, 8, white, blue)),
+			node("B", nodeType, map[string]any{}),
+			node("C", "preview", nil),
+		},
+		Edges: []GraphEdge{dataEdge("e1", "A", "B"), dataEdge("e2", "B", "C")},
+	}
+	rt := NewRuntime("exec1", graph, cfg, nil, nil)
+	rt.Plugins = fixtureRegistry(t, "powers")
+	rt.PluginLimits = plugins.DefaultLimits()
+	rt.PluginLimits.MaxLLMCalls = allowed
+
+	err = rt.Execute(context.Background())
+	return len(gemini.prompts), text.calls, err
+}
+
+// TestImageCallsCountAgainstTheModelBudget. They spend the user's own provider
+// account, and an image costs more than a completion does, so a pack looping
+// over ctx.generateImage is the most expensive mistake available to one.
+func TestImageCallsCountAgainstTheModelBudget(t *testing.T) {
+	gemini, _, err := budgetRun(t, "greedyImages", 3)
+	if err == nil {
+		t.Fatal("a node generating images in a loop was never stopped")
+	}
+	if !strings.Contains(err.Error(), "limit of 3") || !strings.Contains(err.Error(), "ctx.generateImage") {
+		t.Errorf("the refusal does not name the function or the budget: %v", err)
+	}
+	if gemini != 3 {
+		t.Fatalf("the budget let %d image calls through, expected 3", gemini)
+	}
+}
+
+// TestEveryCapabilityDrawsOnTheOneBudget: separate allowances per capability
+// would mean a node could spend five budgets instead of one, and the bill is
+// the same bill whichever function ran up the charge.
+func TestEveryCapabilityDrawsOnTheOneBudget(t *testing.T) {
+	gemini, text, err := budgetRun(t, "mixedSpend", 4)
+	if err == nil {
+		t.Fatal("a node spending across three capabilities was never stopped")
+	}
+	// Four calls in total, in the order the script made them: llm, image,
+	// vision, then llm again, and the fifth is refused.
+	if got := gemini + text; got != 4 {
+		t.Fatalf("%d provider calls were made against a budget of 4 (%d gemini, %d text)", got, gemini, text)
+	}
+}
+
+// TestLocalImageWorkIsNotChargedToTheModelBudget. Turning and mirroring an
+// image reaches no provider and costs nothing, and charging for it would mean a
+// node that rotates six images cannot also call a model.
+func TestLocalImageWorkIsNotChargedToTheModelBudget(t *testing.T) {
+	_, text, err := budgetRun(t, "freeWork", 1)
+	if err != nil {
+		t.Fatalf("forty rotations and one model call did not fit in a budget of one model call: %v", err)
+	}
+	if text != 1 {
+		t.Fatalf("the model was called %d times, want once", text)
+	}
+}
+
+// TestABrainCannotBeAskedForUnboundedSteps. One ctx.brain call costs one unit
+// of the model budget however many turns the loop takes, and the step count now
+// arrives from a Lua node where nobody sees it — so the number a pack can ask
+// for has to be bounded by something other than the person who did not type it.
+func TestABrainCannotBeAskedForUnboundedSteps(t *testing.T) {
+	text := newScriptedOpenAI(t, assistantCalls("call_1", "llm_T", `{"instructions":"again"}`))
+	cfg := &providers.Config{
+		TextProvider: "openai", OpenAIBaseURL: text.URL, OpenAIAPIKey: "test-key-not-a-real-one",
+	}
+	graph := &Graph{
+		Nodes: []GraphNode{
+			node("B", "brain", map[string]any{"goal": "loop forever", "maxSteps": 1000000}),
+			node("T", "llm", map[string]any{"prompt": "x"}),
+			node("P", "preview", nil),
+		},
+		Edges: []GraphEdge{dataEdge("e1", "B", "P"), toolEdge("t1", "T", "B")},
+	}
+	rt := NewRuntime("exec1", graph, cfg, nil, nil)
+	if err := rt.Execute(context.Background()); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	// Two calls per step: the Brain's own turn and the llm tool it invokes.
+	if got := text.calls; got > 2*brainMaxStepsCeiling {
+		t.Fatalf("a Brain asked for a million steps made %d model calls; the ceiling of %d did not hold",
+			got, brainMaxStepsCeiling)
+	}
+	if got := str(rt.Outputs["B"].Value["text"]); !strings.Contains(got, "maximum number of steps") {
+		t.Errorf("the Brain did not stop at its ceiling: %q", got)
 	}
 }

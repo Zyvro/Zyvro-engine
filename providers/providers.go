@@ -25,6 +25,11 @@ type Config struct {
 	OllamaSmallModel string
 	// Google AI Studio settings
 	GoogleAPIKey string
+	// GeminiBaseURL is where the Gemini calls go. It exists so a test can point
+	// them at a loopback server: the image and vision nodes are the two that
+	// cannot be exercised at all without one, and a test that reached the real
+	// endpoint would be a test that spends money and fails on a train.
+	GeminiBaseURL string
 	// ImageModel and VisionModel are the platform defaults a node falls back to
 	// when it does not name a model of its own.
 	ImageModel  string
@@ -74,6 +79,7 @@ func FromEnv() *Config {
 		// the whole budget before producing any content.
 		OllamaSmallModel: getEnv("OLLAMA_SMALL_MODEL", "gemma4:31b"),
 		GoogleAPIKey:     os.Getenv("AI_STUDIO_GOOGLE_API_KEY"),
+		GeminiBaseURL:    getEnv("GEMINI_BASE_URL", defaultGeminiBaseURL),
 		ImageModel:       getEnv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image"),
 		VisionModel:      getEnv("GEMINI_VISION_MODEL", "gemini-3.6-flash"),
 
@@ -136,6 +142,22 @@ func truncate(s string, n int) string {
 }
 
 var httpClient = &http.Client{Timeout: 300 * time.Second}
+
+// defaultGeminiBaseURL is where the Gemini calls go when nothing says otherwise,
+// which is every deployment. Config.GeminiBaseURL overrides it.
+const defaultGeminiBaseURL = "https://generativelanguage.googleapis.com"
+
+// geminiURL builds the generateContent endpoint for a model. It is a method so
+// that a Config with no base URL — one built as a literal rather than by
+// FromEnv, which is how the tests and some embedders do it — still reaches the
+// real endpoint rather than a URL beginning with a slash.
+func (c *Config) geminiURL(model string) string {
+	base := defaultGeminiBaseURL
+	if c != nil && c.GeminiBaseURL != "" {
+		base = strings.TrimSuffix(c.GeminiBaseURL, "/")
+	}
+	return fmt.Sprintf("%s/v1beta/models/%s:generateContent", base, model)
+}
 
 // ---------- LLM (Ollama, OpenAI-compatible) ----------
 
@@ -285,7 +307,7 @@ func (c *Config) GeminiVision(ctx context.Context, model, instruction string, im
 		},
 	}
 	body, _ := json.Marshal(payload)
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", model)
+	url := c.geminiURL(model)
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return "", err
@@ -363,7 +385,7 @@ func (c *Config) GeminiImageGenerate(ctx context.Context, model, prompt, aspectR
 		payload["generationConfig"] = map[string]any{"imageConfig": imageConfig}
 	}
 	body, _ := json.Marshal(payload)
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", model)
+	url := c.geminiURL(model)
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -433,7 +455,7 @@ func (c *Config) GeminiText(ctx context.Context, model, system, user string) (st
 		}
 	}
 	body, _ := json.Marshal(payload)
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", model)
+	url := c.geminiURL(model)
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return "", err

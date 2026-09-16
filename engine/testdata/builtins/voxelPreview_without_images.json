@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "T": {
+      "type": "text",
+      "value": {
+        "text": "x"
+      }
+    }
+  },
+  "error": "node B (voxelPreview): voxel preview needs at least one image input"
+}

@@ -1,0 +1,17 @@
+{
+  "outputs": {
+    "A": {
+      "type": "text",
+      "value": {
+        "text": "the contents"
+      }
+    },
+    "B": {
+      "type": "text",
+      "value": {
+        "savedPath": "out/result.txt",
+        "text": "the contents"
+      }
+    }
+  }
+}

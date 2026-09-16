@@ -1,0 +1,29 @@
+{
+  "outputs": {
+    "A": {
+      "type": "image",
+      "value": {
+        "bytes": 98,
+        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAKUlEQVR4nGL5//8/AzbABGOgAxYGMNAMvAsTYbi+XhmfDtIlGEl2FWAAf8gJDkqVTQkAAAAASUVORK5CYII=",
+        "mimeType": "image/png"
+      }
+    },
+    "A2": {
+      "type": "image",
+      "value": {
+        "bytes": 104,
+        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAL0lEQVR4nGL5//8/AymACcYYPBpYYAwQvKupCWOiAOXr18m3YVQDMRoYh0FaAgwANRoJHqVRR4AAAAAASUVORK5CYII=",
+        "mimeType": "image/png"
+      }
+    },
+    "B": {
+      "type": "json",
+      "value": {
+        "data": {
+          "subject": "a red square",
+          "tags": []
+        }
+      }
+    }
+  }
+}

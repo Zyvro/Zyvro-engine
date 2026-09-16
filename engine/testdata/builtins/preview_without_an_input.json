@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "A": {
+      "type": "text",
+      "value": {
+        "text": "x"
+      }
+    }
+  },
+  "error": "node C (preview): preview node has no input"
+}

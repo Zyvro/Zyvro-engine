@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "T": {
+      "type": "text",
+      "value": {
+        "text": "describe"
+      }
+    }
+  },
+  "error": "node B (vision): vision node needs at least one image"
+}
