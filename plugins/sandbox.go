@@ -328,6 +328,11 @@ func prune(t *lua.LTable, allowed map[string]bool) []string {
 // script must not be able to read or replace.
 const logRegistryKey = "zyvro.runlog"
 
+// clockRegistryKey keeps the script clock beside the log, out of the script's
+// reach for the same reason: a node that could pause its own budget would have
+// no budget.
+const clockRegistryKey = "zyvro.scriptclock"
+
 // newState builds a Lua state a stranger's code can be run in.
 //
 // The state is single use. Nothing is shared between runs — not the globals,
@@ -622,9 +627,14 @@ func compileChunk(name string, src []byte) (*lua.FunctionProto, error) {
 
 // ---------- running ----------
 
-// errMemoryLimit is the cause a run is cancelled with when the heap watchdog
-// trips, so the caller can tell it apart from an ordinary timeout.
-var errMemoryLimit = errors.New("memory limit exceeded")
+// The causes a run is cancelled with, so the caller can tell them apart from
+// each other and from the run's own deadline.
+var (
+	// errScriptTimeout: the script used its budget of its own execution.
+	errScriptTimeout = errors.New("script time budget exhausted")
+	// errMemoryLimit: the heap watchdog tripped.
+	errMemoryLimit = errors.New("memory limit exceeded")
+)
 
 // sandboxRun is the only way anything in this package executes Lua.
 //
@@ -641,7 +651,13 @@ func sandboxRun[T any](ctx context.Context, limits Limits, fn func(*lua.LState) 
 
 	runCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	deadline, stopDeadline := context.WithTimeout(runCtx, limits.Timeout)
+
+	// The budget is script time, not wall time: it stops while the node waits
+	// on a host call the runtime made for it. See scriptclock.go — before that
+	// distinction existed, every model call slower than the budget killed the
+	// node, which is most model calls.
+	clock := &scriptClock{}
+	deadline, stopDeadline := watchScriptTime(runCtx, clock, limits.Timeout, func() { cancel(errScriptTimeout) })
 	defer stopDeadline()
 
 	stopWatchdog := watchHeap(deadline, limits.MaxMemoryBytes, func() { cancel(errMemoryLimit) })
@@ -663,6 +679,7 @@ func sandboxRun[T any](ctx context.Context, limits Limits, fn func(*lua.LState) 
 
 	go func() {
 		L := newState(deadline, limits)
+		attachClock(L, clock)
 		log := stateLog(L)
 		logRef <- log
 		defer L.Close()
@@ -705,8 +722,14 @@ func explainError(ctx context.Context, limits Limits, err error) error {
 	if cause := context.Cause(ctx); errors.Is(cause, errMemoryLimit) {
 		return fmt.Errorf("script used more than %d MB of memory and was stopped", limits.MaxMemoryBytes>>20)
 	}
-	if ctx.Err() != nil || strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+	if errors.Is(context.Cause(ctx), errScriptTimeout) {
 		return fmt.Errorf("script ran longer than %s and was stopped", limits.Timeout)
+	}
+	if ctx.Err() != nil || strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		// The run's own deadline, not the script budget: the whole execution
+		// was told to stop, and saying the script was too slow would send its
+		// author looking in the wrong place.
+		return fmt.Errorf("the run was stopped before this node finished")
 	}
 	return err
 }

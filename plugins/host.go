@@ -156,6 +156,9 @@ type host struct {
 	in     HostInput
 	limits Limits
 	log    *runLog
+	// clock is the script's own time budget. Every call that leaves this
+	// process pauses it: waiting on a provider is not the script running.
+	clock *scriptClock
 	// providerCalls counts every call that can reach the user's own provider
 	// account, whichever function made it. They share one budget because they
 	// share one bill: a loop over ctx.generateImage is more expensive than a
@@ -174,7 +177,7 @@ type host struct {
 func runNode(ctx context.Context, def *NodeDef, in HostInput) (*Output, []string, error) {
 	limits := in.Limits.withDefaults()
 	return sandboxRun(ctx, limits, func(L *lua.LState) (*Output, error) {
-		h := &host{ctx: L.Context(), def: def, in: in, limits: limits, log: stateLog(L)}
+		h := &host{ctx: L.Context(), def: def, in: in, limits: limits, log: stateLog(L), clock: stateClock(L)}
 
 		// The chunk is evaluated again for every run. It has to be: `run` is a
 		// Lua closure, and a closure belongs to the state it was made in. The
@@ -274,6 +277,12 @@ const (
 	local  cost = false
 )
 
+// offScript is the host's own wrapper, so a method can call it without naming
+// the clock every time.
+func (h *host) offScript(fn func() (*Output, error)) (*Output, error) {
+	return offScript(h.clock, fn)
+}
+
 // bind installs a host function when the host actually supplied it.
 func (h *host) bind(L *lua.LState, ctx *lua.LTable, name string, supplied bool, fn lua.LGFunction) {
 	if supplied {
@@ -302,7 +311,7 @@ func (h *host) bindNode(L *lua.LState, ctx *lua.LTable, name string, fn NodeFunc
 				cfg = m
 			}
 		}
-		out, err := fn(h.ctx, cfg)
+		out, err := h.offScript(func() (*Output, error) { return fn(h.ctx, cfg) })
 		if err != nil {
 			h.fail(L, err)
 		}
@@ -443,7 +452,7 @@ func (h *host) luaLLM(L *lua.LState) int {
 	}
 
 	h.chargeProviderCall(L, "ctx.llm")
-	text, err := h.in.LLM(h.ctx, req)
+	text, err := offScript(h.clock, func() (string, error) { return h.in.LLM(h.ctx, req) })
 	if err != nil {
 		L.RaiseError("ctx.llm failed: %s", err.Error())
 	}
