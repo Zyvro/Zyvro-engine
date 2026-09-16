@@ -1,0 +1,6 @@
+{
+  "name": "probe",
+  "version": "0.1.0",
+  "description": "Fixtures that report what the host handed them, and one that fails loudly.",
+  "author": "Zyvro"
+}

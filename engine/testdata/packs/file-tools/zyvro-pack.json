@@ -1,0 +1,9 @@
+{
+  "name": "file-tools",
+  "version": "0.1.0",
+  "description": "A pack that declares the files capability, so the host may lend it the project folder.",
+  "author": "Zyvro",
+  "capabilities": [
+    "files"
+  ]
+}

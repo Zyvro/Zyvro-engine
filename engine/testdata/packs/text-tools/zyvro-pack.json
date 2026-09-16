@@ -1,0 +1,9 @@
+{
+  "name": "text-tools",
+  "version": "0.1.0",
+  "description": "Small text nodes: a summarizer, and a word count that needs no model at all.",
+  "author": "Zyvro",
+  "capabilities": [
+    "llm"
+  ]
+}
