@@ -3,9 +3,11 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -585,5 +587,46 @@ func TestABrainCannotBeAskedForUnboundedSteps(t *testing.T) {
 	}
 	if got := str(rt.Outputs["B"].Value["text"]); !strings.Contains(got, "maximum number of steps") {
 		t.Errorf("the Brain did not stop at its ceiling: %q", got)
+	}
+}
+
+// A node the engine can run must never be reported unknown. This is the test
+// the comment on goImplementedNodeTypes points at: add a case to the switch in
+// executeWithInput, forget to add it here, and the pre-flight refusal starts
+// turning away workflows that would have run.
+func TestNoNodeTheEngineCanRunIsReportedUnknown(t *testing.T) {
+	var nodes []GraphNode
+	for i, typ := range ReservedNodeTypes() {
+		nodes = append(nodes, GraphNode{ID: fmt.Sprintf("n%d", i), Type: typ})
+	}
+	g := &Graph{Nodes: nodes}
+
+	rt := NewRuntime("exec-known", g, nil, nil, nil)
+	if unknown := rt.UnknownNodeTypes(g); len(unknown) != 0 {
+		t.Fatalf("the engine reports its own node types as unknown: %v", unknown)
+	}
+}
+
+func TestANodeNoPackProvidesIsReportedUnknown(t *testing.T) {
+	g := &Graph{Nodes: []GraphNode{
+		{ID: "n1", Type: "textInput"},
+		{ID: "n2", Type: "summarize"},
+		{ID: "n3", Type: "shout"},
+		// Twice, to check the answer is a set and not one entry per node.
+		{ID: "n4", Type: "shout"},
+		{ID: "n5", Type: "output"},
+	}}
+
+	rt := NewRuntime("exec-unknown", g, nil, nil, nil)
+	got := rt.UnknownNodeTypes(g)
+	want := []string{"shout", "summarize"} // trié, pas dans l'ordre du graphe
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+}
+
+func TestUnknownNodeTypesOnNoGraph(t *testing.T) {
+	if got := NewRuntime("exec-nil", nil, nil, nil, nil).UnknownNodeTypes(nil); got != nil {
+		t.Fatalf("expected nothing for a nil graph, got %v", got)
 	}
 }

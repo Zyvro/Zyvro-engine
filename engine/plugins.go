@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/Zyvro/Zyvro-engine/plugins"
 	"github.com/Zyvro/Zyvro-engine/providers"
@@ -31,6 +32,64 @@ import (
 // opened someone else's workflow.
 func unknownNodeType(nodeType string) error {
 	return fmt.Errorf("unknown node type: %s (if this node comes from a pack, that pack may not be installed in this project)", nodeType)
+}
+
+// UnknownNodeTypes reports which of a graph's node types this runtime has no
+// implementation for, sorted, so a caller can refuse a run up front instead of
+// getting halfway through and failing on "unknown node type".
+//
+// It asks the same registry the run itself would ask, rather than comparing
+// against a list of names kept somewhere else: a second list is a list that
+// drifts, and the answer depends on which packs this particular runtime
+// loaded. A hosted server with no packs and a desktop project with three give
+// different answers for the same graph, and both are right.
+//
+// Ordered by type name because the same graph must produce the same list
+// whatever order its nodes happen to sit in.
+func (r *Runtime) UnknownNodeTypes(g *Graph) []string {
+	if g == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, n := range g.Nodes {
+		if seen[n.Type] || !r.dispatchesToPlugin(n.Type) {
+			continue
+		}
+		seen[n.Type] = true
+		if reg := r.registry(); reg != nil {
+			if _, ok := reg.Kind(n.Type); ok {
+				delete(seen, n.Type)
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for t := range seen {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// dispatchesToPlugin says whether executeWithInput would hand this type to the
+// registry. The Go switch cases are implemented whatever the registry holds,
+// so they can never be unknown, and asking the registry about them would
+// wrongly report every one of them as missing.
+func (r *Runtime) dispatchesToPlugin(nodeType string) bool {
+	for _, t := range goImplementedNodeTypes {
+		if t == nodeType {
+			return false
+		}
+	}
+	return true
+}
+
+// goImplementedNodeTypes are the cases executeWithInput answers itself. It
+// sits next to UnknownNodeTypes on purpose: if a case is added to that switch
+// without being added here, the new node reports as unknown and the refusal
+// below turns into a false alarm — which a test in this package catches.
+var goImplementedNodeTypes = []string{
+	"textInput", "imageInput", "fileInput", "fileOutput",
+	"mergeText", "preview", "output", "generateVideo",
 }
 
 // runPluginNode executes one node contributed by a pack, built-in or installed.
