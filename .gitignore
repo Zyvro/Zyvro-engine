@@ -1,0 +1,23 @@
+# Compiled binaries. The /bin/ rule only covers the conventional output
+# directory; a `go build ./cmd/x` with no -o drops the binary at the repo root
+# under the command's own name, which is how one nearly got committed once.
+/bin/
+/zyvrod
+/zyvrel
+*.test
+*.out
+
+# Local media store: generated images and other node output, reproducible by
+# running the workflow again.
+/.content/
+
+# Credentials. Provider keys are read from the environment; never commit them.
+.creds
+.env
+.env.local
+
+# Editor and OS noise
+.DS_Store
+*.log
+.vscode/
+.idea/
