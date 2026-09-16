@@ -245,39 +245,93 @@ func TestUnknownNodeTypeNamesItselfAndSaysAPackMayBeMissing(t *testing.T) {
 
 // ---------- the replay cache ----------
 
-// TestPluginNodeIsNeverReplayedFromTheCache: a fingerprint hashes the graph,
-// and not one byte of a pack's Lua is in the graph. Replaying a plugin node
-// would mean editing its script and getting last week's answer forever.
-func TestPluginNodeIsNeverReplayedFromTheCache(t *testing.T) {
+// A pack node may be replayed, and its code is what decides. Before the code
+// digest existed the only safe answer was never, which meant the cache had a
+// hole exactly where the expensive nodes were about to move.
+func TestAPluginNodeIsReplayedWhileItsCodeIsUnchanged(t *testing.T) {
 	graph := textThen("one two three", "wordCount", nil)
 	rt := NewRuntime("exec2", graph, nil, nil, nil)
 	rt.Plugins = fixtureRegistry(t, "text-tools")
 
-	fps, _, err := ComputeFingerprints(graph, nil)
+	fps, _, err := rt.ComputeFingerprints(nil)
 	if err != nil {
 		t.Fatalf("fingerprints: %v", err)
 	}
 	rt.Fingerprints = fps
-	// Both nodes are offered a cache entry under their current fingerprint, so
-	// the only difference between them is what they are.
 	rt.Cache = map[string]CacheEntry{
 		"A": {NodeID: "A", Fingerprint: fps["A"], Output: textOutput("cached input")},
-		"B": {NodeID: "B", Fingerprint: fps["B"], Output: textOutput("cached, and wrong")},
+		"B": {NodeID: "B", Fingerprint: fps["B"], Output: textOutput("cached plugin answer")},
 	}
 
 	if err := rt.ExecuteWithReporting(context.Background(), newCountingReporter()); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	// The built-in was replayed: that is the control, and without it this test
-	// would also pass against a cache that was never consulted.
+	// The built-in is the control: without it this would also pass against a
+	// cache that was never consulted at all.
 	if !rt.Replayed["A"] {
 		t.Error("the built-in node was not replayed, so the cache was not wired up")
 	}
-	if rt.Replayed["B"] {
-		t.Fatal("the plugin node was served from the replay cache")
+	if !rt.Replayed["B"] {
+		t.Fatal("a plugin node whose code has not changed was not replayed")
 	}
-	if rt.Outputs["B"].Type != "json" {
-		t.Fatalf("plugin output = %+v, want the freshly computed one", rt.Outputs["B"])
+}
+
+// The point of hashing the code: edit the script, and the answer the old
+// script gave stops being offered. Simulated by fingerprinting against a
+// different digest for the same type, which is what a re-read of an edited
+// file produces.
+func TestAPluginNodeIsNotReplayedOnceItsCodeChanges(t *testing.T) {
+	graph := textThen("one two three", "wordCount", nil)
+	rt := NewRuntime("exec2", graph, nil, nil, nil)
+	rt.Plugins = fixtureRegistry(t, "text-tools")
+
+	before, _, err := rt.ComputeFingerprints(nil)
+	if err != nil {
+		t.Fatalf("fingerprints: %v", err)
+	}
+	edited, _, err := ComputeFingerprints(graph, nil, func(nodeType string) (string, bool) {
+		if nodeType == "wordCount" {
+			return "the-script-after-an-edit", true
+		}
+		return rt.nodeCode(nodeType)
+	})
+	if err != nil {
+		t.Fatalf("fingerprints: %v", err)
+	}
+
+	if before["A"] != edited["A"] {
+		t.Error("editing one node's script changed an unrelated node's fingerprint")
+	}
+	if before["B"] == edited["B"] {
+		t.Fatal("editing a node's script left its fingerprint unchanged, so the old answer would replay forever")
+	}
+
+	// And the cache recorded under the old fingerprint is not offered.
+	rt.Fingerprints = edited
+	rt.Cache = map[string]CacheEntry{
+		"B": {NodeID: "B", Fingerprint: before["B"], Output: textOutput("the answer the old script gave")},
+	}
+	if _, ok := rt.cachedOutput("B"); ok {
+		t.Fatal("a cache entry from before the edit was offered for replay")
+	}
+}
+
+// A node that reaches the project folder stays outside the fingerprint however
+// stable its code is: the fingerprint describes the graph, and that node's
+// result depends on a disk the graph says nothing about.
+func TestAPluginNodeThatReachesTheProjectFolderIsNeverReplayed(t *testing.T) {
+	rt := NewRuntime("exec3", &Graph{}, nil, nil, nil)
+	rt.Plugins = fixtureRegistry(t, "text-tools", "file-tools")
+
+	for nodeType, want := range map[string]bool{
+		"readText":  true,  // le pack file-tools déclare la capacité files
+		"wordCount": false, // texte pur, entièrement décrit par le graphe
+		"llm":       false, // pack embarqué
+		"fileInput": true,  // nœud Go qui lit le disque
+	} {
+		if got := rt.outsideTheFingerprint(nodeType); got != want {
+			t.Errorf("outsideTheFingerprint(%q) = %v, want %v", nodeType, got, want)
+		}
 	}
 }
 

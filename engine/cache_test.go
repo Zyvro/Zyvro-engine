@@ -22,11 +22,11 @@ func smallGraph() *Graph {
 
 func TestFingerprintStable(t *testing.T) {
 	g := smallGraph()
-	fps1, parents, err := ComputeFingerprints(g, nil)
+	fps1, parents, err := ComputeFingerprints(g, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fps2, _, err := ComputeFingerprints(g, nil)
+	fps2, _, err := ComputeFingerprints(g, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestFingerprintStable(t *testing.T) {
 
 func TestFingerprintConfigChangeInvalidatesDownstream(t *testing.T) {
 	g := smallGraph()
-	fpsBefore, _, err := ComputeFingerprints(g, nil)
+	fpsBefore, _, err := ComputeFingerprints(g, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestFingerprintConfigChangeInvalidatesDownstream(t *testing.T) {
 	// Change A's config: A, B and C fingerprints must all change.
 	cfg := g.Nodes[0].Data["config"].(map[string]any)
 	cfg["value"] = "changed"
-	fpsAfter, _, err := ComputeFingerprints(g, nil)
+	fpsAfter, _, err := ComputeFingerprints(g, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestFingerprintConfigChangeInvalidatesDownstream(t *testing.T) {
 	cfg["value"] = "hello"
 	bcfg := g.Nodes[1].Data["config"].(map[string]any)
 	bcfg["mode"] = "ai"
-	fpsB, _, _ := ComputeFingerprints(g, nil)
+	fpsB, _, _ := ComputeFingerprints(g, nil, nil)
 	if fpsB["A"] != fpsBefore["A"] {
 		t.Fatal("A fingerprint must be unchanged")
 	}
@@ -83,7 +83,7 @@ func TestFingerprintConfigChangeInvalidatesDownstream(t *testing.T) {
 
 func TestLoadCacheAndReplay(t *testing.T) {
 	g := smallGraph()
-	fps, _, err := ComputeFingerprints(g, nil)
+	fps, _, err := ComputeFingerprints(g, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

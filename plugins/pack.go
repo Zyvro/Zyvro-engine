@@ -2,6 +2,8 @@ package plugins
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -142,6 +144,13 @@ type NodeDef struct {
 
 	// Source is the file the definition came from, for error messages.
 	Source string `json:"source"`
+
+	// CodeDigest is a hash of the exact bytes that were compiled for this
+	// node. It exists so a caching host can tell two versions of a node
+	// apart: a node's behaviour is its script, and a script in a folder the
+	// user can edit changes between two runs of the same binary. Without it
+	// the only safe answer was to never replay a pack node at all.
+	CodeDigest string `json:"codeDigest"`
 
 	// proto is the compiled chunk, not the run function. A Lua closure belongs
 	// to the state it was made in, and every run gets a fresh state, so what is
@@ -338,6 +347,12 @@ func loadNodeFile(fsys fs.FS, file string, m *Manifest, reserved []string) (*Nod
 	def.Pack = m.Name
 	def.Capabilities = append([]string(nil), m.Capabilities...)
 	def.Source = name
+	// Hashed from the source rather than from the compiled chunk: the bytes
+	// are what the author edited and what a reviewer read, and a compiler that
+	// changed its output between versions would otherwise invalidate every
+	// cache entry for nodes nobody touched.
+	sum := sha256.Sum256(src)
+	def.CodeDigest = hex.EncodeToString(sum[:])
 	def.proto = proto
 	return def, nil
 }

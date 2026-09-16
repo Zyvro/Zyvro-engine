@@ -587,7 +587,12 @@ func (d *daemon) execute(ctx context.Context, run *localstore.Run, wf *localstor
 
 	// Fingerprints of the current graph state; without them nothing can be
 	// replayed, so a failure here only costs cache hits, not the run.
-	fps, _, fpErr := engine.ComputeFingerprints(graph, inputs)
+	//
+	// Asked of the runtime rather than of the package, because the runtime
+	// holds the registry: here, where packs are installed and their scripts
+	// are files the user can edit, a node's code has to be part of what
+	// identifies its result.
+	fps, _, fpErr := rt.ComputeFingerprints(inputs)
 	if fpErr == nil {
 		rt.Fingerprints = fps
 		if useCache {

@@ -478,3 +478,83 @@ func TestAPackNodesLogLandsOnItsRecord(t *testing.T) {
 		t.Errorf("log = %q, want what the node printed before it gave up", got)
 	}
 }
+
+// ---------- the replay cache and a pack's code ----------
+
+// runWorkflow runs a workflow that already exists, so two runs share the cache
+// the way two clicks of Run do. runGraph above makes a new one each time, which
+// is the opposite of what these tests need.
+func (e *packEnv) runWorkflow(id string) executionEnvelope {
+	e.t.Helper()
+	start := decode[struct {
+		ExecutionID string `json:"execution_id"`
+	}](e.t, mustStatus(e.t, e.do(http.MethodPost, "/api/executions", map[string]any{
+		"workflow_id": id,
+	}), http.StatusAccepted))
+	return e.waitForExecution(start.ExecutionID)
+}
+
+func nodeStatus(t *testing.T, final executionEnvelope, nodeID string) string {
+	t.Helper()
+	for i := range final.Nodes {
+		if final.Nodes[i].NodeID == nodeID {
+			return final.Nodes[i].Status
+		}
+	}
+	t.Fatalf("no record for node %s", nodeID)
+	return ""
+}
+
+// A pack node is replayed while its script is untouched, and stops being
+// replayed the moment the script changes. Before the code digest was part of
+// the fingerprint neither half was true: pack nodes were excluded from the
+// cache wholesale, which was safe and wrong — safe because an edited script
+// could not replay a stale answer, wrong because an untouched one could not
+// replay a correct one either.
+func TestEditingAPackNodesScriptEndsItsReplay(t *testing.T) {
+	e := newPackEnv(t, func(dir string) { installFixturePack(t, dir, "text-tools") })
+
+	wf := decode[localstore.Workflow](t, mustStatus(t,
+		e.do(http.MethodPost, "/api/workflows", map[string]any{
+			"name":       "Pack replay",
+			"graph_json": packGraph("wordCount"),
+		}), http.StatusCreated))
+
+	if final := e.runWorkflow(wf.ID); final.Execution.Status != "completed" {
+		t.Fatalf("first run: status = %q, error = %q", final.Execution.Status, final.Execution.Error)
+	}
+	second := e.runWorkflow(wf.ID)
+	if second.Execution.Status != "completed" {
+		t.Fatalf("second run: status = %q, error = %q", second.Execution.Status, second.Execution.Error)
+	}
+	if got := nodeStatus(t, second, "n2"); got != "cached" {
+		t.Fatalf("an unchanged pack node was recomputed: status = %q", got)
+	}
+
+	// Edit the script the way the user would, in the folder they opened.
+	node := filepath.Join(e.store.PacksDir(), "text-tools", "nodes", "word_count.lua")
+	src, err := os.ReadFile(node)
+	if err != nil {
+		t.Fatalf("read node: %v", err)
+	}
+	edited := strings.Replace(string(src), "words = words + 1", "words = words + 2", 1)
+	if edited == string(src) {
+		t.Fatal("the fixture changed shape; this edit no longer applies")
+	}
+	if err := os.WriteFile(node, []byte(edited), 0o644); err != nil {
+		t.Fatalf("write node: %v", err)
+	}
+	mustStatus(t, e.do(http.MethodPost, "/api/packs/reload", nil), http.StatusOK)
+
+	third := e.runWorkflow(wf.ID)
+	if third.Execution.Status != "completed" {
+		t.Fatalf("third run: status = %q, error = %q", third.Execution.Status, third.Execution.Error)
+	}
+	if got := nodeStatus(t, third, "n2"); got == "cached" {
+		t.Fatal("the edited pack node replayed the answer its old script gave")
+	}
+	// And the new script is what actually ran: four words counted twice each.
+	if !strings.Contains(third.Execution.OutputJSON, `"words":8`) {
+		t.Fatalf("output_json = %q, want the edited script's count", third.Execution.OutputJSON)
+	}
+}

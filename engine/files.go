@@ -70,8 +70,14 @@ func (r *Runtime) outsideTheFingerprint(nodeType string) bool {
 		}
 	}
 	if reg := r.registry(); reg != nil {
-		if _, ok := reg.Kind(nodeType); ok {
-			return !reg.IsBuiltin(nodeType)
+		if def, ok := reg.Kind(nodeType); ok {
+			// A pack node used to be excluded wholesale, because its behaviour
+			// is a script the user can edit and not one byte of it was in the
+			// fingerprint. That byte is in it now, so the only question left is
+			// the one that was always the real one: does this node reach
+			// outside the graph? The `files` capability is what lets it, and it
+			// is exactly what the two file nodes above have.
+			return def.Has("files")
 		}
 	}
 	return false

@@ -38,10 +38,22 @@ func fingerprintValue(h interface{ Write([]byte) (int, error) }, v any) {
 	_, _ = h.Write(b)
 }
 
+// NodeCode answers, for a node type implemented in Lua, a digest of the exact
+// code that would run. A nil NodeCode, or a false second return, means "no
+// script stands behind this type here" — which is the right answer for a Go
+// switch case and for a host that loaded no packs.
+//
+// It is a parameter rather than something this file looks up because the
+// answer belongs to a particular host: the same graph, on a machine where the
+// user has edited a node's script, must fingerprint differently than it did
+// before the edit, and on a machine with no packs at all the question does not
+// arise. Runtime.ComputeFingerprints supplies the registry's answer.
+type NodeCode func(nodeType string) (string, bool)
+
 // FingerprintOf computes the fingerprint of a node in the current graph
 // state. upstream are the fingerprints of the node's data-edge parents,
 // aligned with UpstreamOf(g, nodeID).
-func FingerprintOf(g *Graph, nodeID string, upstream []NodeFingerprint, runtimeInputs map[string]any) (NodeFingerprint, error) {
+func FingerprintOf(g *Graph, nodeID string, upstream []NodeFingerprint, runtimeInputs map[string]any, code NodeCode) (NodeFingerprint, error) {
 	n := NodeByID(g, nodeID)
 	if n == nil {
 		return "", fmt.Errorf("node %s not found", nodeID)
@@ -49,6 +61,20 @@ func FingerprintOf(g *Graph, nodeID string, upstream []NodeFingerprint, runtimeI
 	h := sha256.New()
 	h.Write([]byte("zyvro-node-v1\n"))
 	h.Write([]byte(n.Type + "\n"))
+
+	// The node's own code, when it has any. A type name is only a stable
+	// description of behaviour while one implementation stands behind it, and
+	// a pack node's implementation is a file the user can edit: without this,
+	// editing a node and running again replayed the old answer forever.
+	//
+	// Absent when there is no script, which leaves the hash byte-for-byte what
+	// it was before this existed — so every cache entry recorded for a Go node
+	// stays valid.
+	if code != nil {
+		if digest, ok := code(n.Type); ok {
+			h.Write([]byte("code:" + digest + "\n"))
+		}
+	}
 
 	// Config: sorted-key canonical JSON so any map ordering is stable.
 	cfg := nodeConfig(n)
@@ -100,7 +126,7 @@ func sortedKeys(m map[string]any) []string {
 // ComputeFingerprints walks the graph in topological order and computes a
 // fingerprint per node, including upstream fingerprints transitively.
 // Returns a map nodeID -> fingerprint, or an error if the graph is invalid.
-func ComputeFingerprints(g *Graph, runtimeInputs map[string]any) (map[string]NodeFingerprint, map[string][]string, error) {
+func ComputeFingerprints(g *Graph, runtimeInputs map[string]any, code NodeCode) (map[string]NodeFingerprint, map[string][]string, error) {
 	order, err := TopoOrder(g)
 	if err != nil {
 		return nil, nil, err
@@ -114,7 +140,7 @@ func ComputeFingerprints(g *Graph, runtimeInputs map[string]any) (map[string]Nod
 		for i, u := range ups {
 			upFps[i] = fps[u]
 		}
-		fp, err := FingerprintOf(g, id, upFps, runtimeInputs)
+		fp, err := FingerprintOf(g, id, upFps, runtimeInputs, code)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -158,3 +184,27 @@ type CachedNodeResult struct {
 
 // String makes fingerprints printable.
 func (f NodeFingerprint) String() string { return string(f) }
+
+// nodeCode is this runtime's answer to NodeCode: the digest the registry holds
+// for a Lua node, nothing for a type the Go switch answers itself.
+func (r *Runtime) nodeCode(nodeType string) (string, bool) {
+	reg := r.registry()
+	if reg == nil {
+		return "", false
+	}
+	def, ok := reg.Kind(nodeType)
+	if !ok || def.CodeDigest == "" {
+		return "", false
+	}
+	return def.CodeDigest, true
+}
+
+// ComputeFingerprints is the form to use when packs are in play: it hashes
+// each Lua node's code into its fingerprint, so a node whose script changed no
+// longer replays the answer the old script gave.
+//
+// The package-level function is still the right call for a host that has no
+// packs — it takes the lookup as a parameter and nil says so.
+func (r *Runtime) ComputeFingerprints(runtimeInputs map[string]any) (map[string]NodeFingerprint, map[string][]string, error) {
+	return ComputeFingerprints(r.Graph, runtimeInputs, r.nodeCode)
+}
