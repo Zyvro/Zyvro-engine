@@ -543,7 +543,7 @@ func (r *Runtime) runGenerateImage(ctx context.Context, in *RunInput) (*NodeOutp
 		refs = append(refs, providers.ImageResult{Data: data, MimeType: mime})
 	}
 
-	img, err := r.Providers.GeminiImageGenerate(ctx, model, prompt, aspect, imageSize, refs)
+	img, err := r.Providers.ImageGenerate(ctx, str(in.Config["provider"]), model, prompt, aspect, imageSize, refs)
 	if err != nil {
 		return nil, fmt.Errorf("image generation failed: %w", err)
 	}

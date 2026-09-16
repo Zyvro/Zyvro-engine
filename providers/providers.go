@@ -35,6 +35,16 @@ type Config struct {
 	ImageModel  string
 	VisionModel string
 
+	// Black Forest Labs, the second image backend. The platform holds this one
+	// so that somebody who has just signed up can generate an image before
+	// being asked for a credential of their own.
+	BFLAPIKey string
+	// BFLBaseURL exists for the same reason GeminiBaseURL does: a test that
+	// reached the real endpoint would spend money and fail on a train.
+	BFLBaseURL string
+	// ImageProvider is the deployment default when a node names no provider.
+	ImageProvider string
+
 	// Anthropic and OpenAI, reached with the user's own credential. Anthropic
 	// accepts either a console API key or an OAuth token; the adapter tells
 	// them apart and sends the matching header.
@@ -81,7 +91,12 @@ func FromEnv() *Config {
 		GoogleAPIKey:     os.Getenv("AI_STUDIO_GOOGLE_API_KEY"),
 		GeminiBaseURL:    getEnv("GEMINI_BASE_URL", defaultGeminiBaseURL),
 		ImageModel:       getEnv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image"),
-		VisionModel:      getEnv("GEMINI_VISION_MODEL", "gemini-3.6-flash"),
+		// Named for the model it buys rather than for the vendor, because that
+		// is the name on the account this key belongs to.
+		BFLAPIKey:     os.Getenv("KLEIN_CLOUD_API_KEY"),
+		BFLBaseURL:    getEnv("KLEIN_CLOUD_BASE_URL", bflDefaultBaseURL),
+		ImageProvider: getEnv("IMAGE_PROVIDER", ""),
+		VisionModel:   getEnv("GEMINI_VISION_MODEL", "gemini-3.6-flash"),
 
 		AnthropicAPIKey:  os.Getenv("ANTHROPIC_API_KEY"),
 		AnthropicModel:   getEnv("ANTHROPIC_MODEL", "claude-opus-5"),
