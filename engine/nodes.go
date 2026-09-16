@@ -240,6 +240,29 @@ func BuiltinNodeTypes() []string {
 	return out
 }
 
+// RunnableBuiltinNodeTypes is every node this engine actually offers: the Go
+// switch cases and the bundled pack's Lua nodes, minus the ones that are
+// disabled. It is what a palette should contain, which is what separates it
+// from ReservedNodeTypes — a disabled type is still a name a pack may not take,
+// and still not a node anyone can use.
+//
+// Installed packs are deliberately absent: they are a property of a project,
+// not of this binary.
+func RunnableBuiltinNodeTypes() []string {
+	disabled := map[string]bool{}
+	for _, t := range disabledNodeTypes {
+		disabled[t] = true
+	}
+	out := make([]string, 0, len(builtinKinds))
+	for _, t := range ReservedNodeTypes() {
+		if !disabled[t] {
+			out = append(out, t)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // ReservedNodeTypes is every name a pack may not take: the ones above, and the
 // ones the bundled pack defines.
 //

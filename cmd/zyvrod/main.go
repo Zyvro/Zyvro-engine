@@ -40,6 +40,7 @@ func main() {
 	project := flag.String("project", "", "project folder to open (required)")
 	port := flag.Int("port", 0, "port to listen on; 0 picks a free one")
 	showVersion := flag.Bool("version", false, "print the engine version and exit")
+	nodeTypes := flag.Bool("node-types", false, "print the node types this engine runs, one per line, and exit")
 	flag.Parse()
 
 	// --version answers before anything else is checked. It is what an updater
@@ -47,6 +48,20 @@ func main() {
 	// has no project folder to open.
 	if *showVersion {
 		fmt.Println(versionLine())
+		return
+	}
+
+	// --node-types answers before the project check too, for the same reason:
+	// the question is about the binary, not about anyone's folder. It exists so
+	// a build can compare this list against a palette maintained by hand
+	// somewhere else, which is otherwise a mirror nobody checks.
+	//
+	// Only the types this binary implements itself. A project's installed packs
+	// add more, and those are not a property of the engine.
+	if *nodeTypes {
+		for _, t := range engine.RunnableBuiltinNodeTypes() {
+			fmt.Println(t)
+		}
 		return
 	}
 

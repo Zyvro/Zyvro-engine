@@ -7,9 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/Zyvro/Zyvro-engine/engine"
 )
 
 // The defaults are part of the contract: a binary that did not go through the
@@ -117,6 +120,37 @@ func TestLocalStatusReportsTheVersion(t *testing.T) {
 	for _, field := range []string{"project", "workflows", "providers", "cli", "local_nodes"} {
 		if _, ok := got[field]; !ok {
 			t.Errorf("status lost its %q field", field)
+		}
+	}
+}
+
+// --node-types is what a build elsewhere asks to check a palette it maintains
+// by hand. It answers on a binary with no project folder, like --version, and
+// it lists exactly what this engine offers.
+func TestNodeTypesFlagListsWhatTheEngineOffers(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "zyvrod-under-test")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+
+	out, err := exec.Command(bin, "--node-types").Output()
+	if err != nil {
+		t.Fatalf("--node-types exited non-zero: %v", err)
+	}
+	var got []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		got = append(got, strings.TrimSpace(line))
+	}
+	want := engine.RunnableBuiltinNodeTypes()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("--node-types printed %v, want %v", got, want)
+	}
+
+	// A disabled node is a name a pack may not take, and still not a node
+	// anyone can place: it must not reach a palette.
+	for _, t2 := range got {
+		if t2 == "generateVideo" {
+			t.Error("a disabled node type was offered as runnable")
 		}
 	}
 }
