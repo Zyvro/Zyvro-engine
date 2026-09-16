@@ -553,7 +553,11 @@ func TestProvidersCatalogShape(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"google", "anthropic", "openai", "ollama", "claude-cli", "codex-cli"} {
+	// Black Forest Labs was missing from this catalogue entirely, so the desktop
+	// could not use a backend the engine has driven since it was added — found
+	// when splitting image from vision made the image section read as one
+	// provider with no alternative.
+	for _, want := range []string{"google", "bfl", "anthropic", "openai", "ollama", "claude-cli", "codex-cli"} {
 		if _, ok := byID[want]; !ok {
 			t.Errorf("catalog is missing %q", want)
 		}
@@ -577,6 +581,9 @@ func TestProvidersCatalogShape(t *testing.T) {
 	}
 	if covers("ollama", "image") {
 		t.Error("Ollama was listed for image generation, which it cannot do")
+	}
+	if !covers("bfl", "image") || covers("bfl", "vision") || covers("bfl", "text") {
+		t.Errorf("Black Forest Labs generates images and does nothing else: %v", byID["bfl"].Roles)
 	}
 	for _, id := range []string{"claude-cli", "codex-cli"} {
 		if covers(id, "vision") || covers(id, "image") {

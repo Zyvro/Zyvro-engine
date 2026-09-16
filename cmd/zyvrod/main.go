@@ -914,6 +914,14 @@ func (d *daemon) localCatalog() []providerInfo {
 			SetupHint:  "Create an API key in Google AI Studio. Every image and vision node needs it.",
 		},
 		{
+			ID:         "bfl",
+			Label:      "Black Forest Labs (FLUX)",
+			Purpose:    "Image generation on FLUX models.",
+			KeyHint:    "Black Forest Labs API key",
+			ConsoleURL: "https://dashboard.bfl.ai/keys",
+			SetupHint:  "Create a key in the Black Forest Labs dashboard. It pays per image, so a small top-up goes a long way.",
+		},
+		{
 			ID:         "anthropic",
 			Label:      "Claude (Anthropic)",
 			Purpose:    "Text generation and the Brain agent, on Claude models.",
@@ -1030,6 +1038,8 @@ func effectiveCredential(cfg *providers.Config, id string) string {
 	switch id {
 	case "google":
 		return cfg.GoogleAPIKey
+	case "bfl":
+		return cfg.BFLAPIKey
 	case "anthropic":
 		return cfg.AnthropicAPIKey
 	case "openai":
