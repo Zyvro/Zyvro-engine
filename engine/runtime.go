@@ -17,11 +17,17 @@ import (
 
 // NodeOutput is the value produced by one node. Media is carried as data
 // URLs inside Value so the engine stays JSON-serializable end to end.
-type NodeOutput struct {
-	// Type mirrors the port type system: text, image, json, boolean, number.
-	Type  string         `json:"type"`
-	Value map[string]any `json:"value"`
-}
+// NodeOutput is plugins.Output, not a copy of it.
+//
+// They were two structs with the same two fields and the same two JSON tags,
+// converted field by field at three places. Nothing kept them in step: add a
+// field to one and the conversions compile unchanged, silently dropping it —
+// which for a node's result means a value that leaves the node and never
+// arrives. Aliasing removes the question rather than answering it, and it
+// costs nothing here because engine already imports plugins.
+//
+// The Type is the port type system: text, image, json, boolean, number.
+type NodeOutput = plugins.Output
 
 func textOutput(s string) *NodeOutput {
 	return &NodeOutput{Type: "text", Value: map[string]any{"text": s}}

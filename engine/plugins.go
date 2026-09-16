@@ -115,10 +115,9 @@ func (r *Runtime) runPluginNode(ctx context.Context, in *RunInput) (*NodeOutput,
 	if out == nil {
 		return nil, fmt.Errorf("%s returned no output", nodeType)
 	}
-	// plugins.Output mirrors NodeOutput field for field, and is a separate type
-	// only because the import cannot go the other way. Nothing downstream can
+	// Returned as it came: NodeOutput is this type. Nothing downstream can
 	// tell a pack node's result from a built-in's.
-	return &NodeOutput{Type: out.Type, Value: out.Value}, nil
+	return out, nil
 }
 
 // pluginHostInput assembles everything one plugin node execution is given.
@@ -199,7 +198,7 @@ func (r *Runtime) nodeFunc(in *RunInput, run nodeRun) plugins.NodeFunc {
 		if out == nil {
 			return nil, fmt.Errorf("%s produced no output", in.Node.Type)
 		}
-		return &plugins.Output{Type: out.Type, Value: out.Value}, nil
+		return out, nil
 	}
 }
 
@@ -210,7 +209,7 @@ func (r *Runtime) nodeFunc(in *RunInput, run nodeRun) plugins.NodeFunc {
 func firstNonNil(ups []*NodeOutput) *plugins.Output {
 	for _, u := range ups {
 		if u != nil {
-			return &plugins.Output{Type: u.Type, Value: u.Value}
+			return u
 		}
 	}
 	return nil

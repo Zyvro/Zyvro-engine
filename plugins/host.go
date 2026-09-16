@@ -26,7 +26,9 @@ import (
 // engine imports this package; keeping the shapes in step by hand is the cost
 // of not having a cycle.
 type Output struct {
-	// Type is a port type: text, image or json.
+	// Type is a port type: text, image, json, boolean or number. This is the
+	// engine's NodeOutput too — engine aliases this type rather than mirroring
+	// it, so there is one shape and not two that have to agree.
 	Type string `json:"type"`
 	// Value carries the payload the way the engine's own nodes do — text under
 	// "text", an image as a data URL under "dataUrl" — so nothing downstream
