@@ -28,7 +28,7 @@ const preferenceFile = "providers.json"
 // are the reason half the orderings exist. Splitting them would mean reading
 // two files to know where one call goes.
 type preferences struct {
-	Order     map[string][]string `json:"order"`
+	Order     map[string][]string `json:"order,omitempty"`
 	Endpoints map[string]Endpoint `json:"endpoints,omitempty"`
 }
 
