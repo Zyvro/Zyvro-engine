@@ -12,9 +12,33 @@ import (
 // file is the only place the choice is made.
 
 // TextProviders is the set of providers that can back a text node or the Brain.
-// The two -cli entries are subprocess providers and only work where the engine
-// runs on the user's own machine.
-var TextProviders = []string{"ollama", "anthropic", "openai", "claude-cli", "codex-cli"}
+var TextProviders = []string{"ollama", "anthropic", "openai", claudeCLIProvider, codexCLIProvider}
+
+// LocalOnlyTextProviders are the subprocess ones: they run a command line tool
+// and so only work where the engine runs on the user's own machine.
+//
+// Said here rather than left for a caller to know, because a hosted service has
+// to keep this exact distinction and was keeping its own copy of the list. Two
+// lists mean one of them is wrong the day a provider is added — the engine
+// would grow a fourth hosted backend and the hosted service would quietly go on
+// refusing it.
+var LocalOnlyTextProviders = []string{claudeCLIProvider, codexCLIProvider}
+
+// HostedTextProviders is TextProviders minus the ones that need a local
+// machine: what a server can actually offer.
+func HostedTextProviders() []string {
+	local := map[string]bool{}
+	for _, p := range LocalOnlyTextProviders {
+		local[p] = true
+	}
+	out := make([]string, 0, len(TextProviders))
+	for _, p := range TextProviders {
+		if !local[p] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 
 // resolveTextProvider picks the provider for one call: the node's own choice
 // first, then the deployment default, then Ollama.
