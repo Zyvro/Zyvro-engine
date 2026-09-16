@@ -38,13 +38,26 @@ var LocalOnlyTextProviders = append(
 
 // HostedTextProviders is TextProviders minus the ones that need a local
 // machine: what a server can actually offer.
-func HostedTextProviders() []string {
+func HostedTextProviders() []string { return hostedOnly(TextProviders) }
+
+// HostedVisionProviders is the same subtraction for vision.
+//
+// It exists because the local endpoints do both jobs, so the hosted service
+// needed the exclusion in two places — and the version of this where the second
+// place kept its own list is the version where a vision node can name a backend
+// the server cannot reach and nothing says why.
+func HostedVisionProviders() []string { return hostedOnly(VisionProviders) }
+
+// hostedOnly drops the providers that only exist on the machine the person is
+// sitting at. LocalOnlyTextProviders is the list of those; it is named for text
+// because that is where it started, and it is still the one list.
+func hostedOnly(all []string) []string {
 	local := map[string]bool{}
 	for _, p := range LocalOnlyTextProviders {
 		local[p] = true
 	}
-	out := make([]string, 0, len(TextProviders))
-	for _, p := range TextProviders {
+	out := make([]string, 0, len(all))
+	for _, p := range all {
 		if !local[p] {
 			out = append(out, p)
 		}

@@ -210,6 +210,22 @@ func TestTheThreeAreOfferedForBothJobs(t *testing.T) {
 	}
 }
 
+func TestTheHostedServiceIsNeverOfferedALocalEndpoint(t *testing.T) {
+	// Both jobs, because these do both: a vision node naming a backend the
+	// server cannot reach fails with a connection error nobody can act on.
+	for _, p := range OpenAICompatibleProviders {
+		if contains(HostedTextProviders(), p) {
+			t.Errorf("%s offered for hosted text", p)
+		}
+		if contains(HostedVisionProviders(), p) {
+			t.Errorf("%s offered for hosted vision", p)
+		}
+	}
+	if !contains(HostedVisionProviders(), "google") {
+		t.Error("the hosted vision list lost google")
+	}
+}
+
 func contains(list []string, want string) bool {
 	for _, s := range list {
 		if s == want {
