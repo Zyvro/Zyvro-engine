@@ -49,18 +49,33 @@ func (c *Config) resolveVisionProvider(requested string) string {
 			return "openai"
 		}
 	}
-	// A credential that is present beats one that is not, in the order a
-	// deployment is most likely to have configured them.
-	if strings.TrimSpace(c.GoogleAPIKey) != "" {
+	// The account's own order first; failing that, a credential that is present
+	// beats one that is not, in the order a deployment is most likely to have
+	// configured them.
+	return c.PreferredOrDefault("vision", c.hasVisionCredential, func() string {
+		if strings.TrimSpace(c.GoogleAPIKey) != "" {
+			return "google"
+		}
+		if strings.TrimSpace(c.OllamaAPIKey) != "" || strings.TrimSpace(c.OllamaURL) != "" {
+			return "ollama"
+		}
+		if strings.TrimSpace(c.OpenAIAPIKey) != "" {
+			return "openai"
+		}
 		return "google"
+	})
+}
+
+func (c *Config) hasVisionCredential(provider string) bool {
+	switch provider {
+	case "google":
+		return strings.TrimSpace(c.GoogleAPIKey) != ""
+	case "ollama":
+		return strings.TrimSpace(c.OllamaAPIKey) != "" || strings.TrimSpace(c.OllamaURL) != ""
+	case "openai":
+		return strings.TrimSpace(c.OpenAIAPIKey) != ""
 	}
-	if strings.TrimSpace(c.OllamaAPIKey) != "" || strings.TrimSpace(c.OllamaURL) != "" {
-		return "ollama"
-	}
-	if strings.TrimSpace(c.OpenAIAPIKey) != "" {
-		return "openai"
-	}
-	return "google"
+	return false
 }
 
 // ResolvedVisionProvider says which backend a request would land on, so a

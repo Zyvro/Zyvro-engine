@@ -29,10 +29,22 @@ func (c *Config) resolveImageProvider(requested string) string {
 			return "bfl"
 		}
 	}
-	if strings.TrimSpace(c.GoogleAPIKey) == "" && strings.TrimSpace(c.BFLAPIKey) != "" {
-		return "bfl"
+	return c.PreferredOrDefault("image", c.hasImageCredential, func() string {
+		if strings.TrimSpace(c.GoogleAPIKey) == "" && strings.TrimSpace(c.BFLAPIKey) != "" {
+			return "bfl"
+		}
+		return "google"
+	})
+}
+
+func (c *Config) hasImageCredential(provider string) bool {
+	switch provider {
+	case "google":
+		return strings.TrimSpace(c.GoogleAPIKey) != ""
+	case "bfl":
+		return strings.TrimSpace(c.BFLAPIKey) != ""
 	}
-	return "google"
+	return false
 }
 
 // ImageGenerate renders a prompt with whichever backend the request or the

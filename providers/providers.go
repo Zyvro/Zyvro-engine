@@ -52,6 +52,16 @@ type Config struct {
 	// what every run on somebody's own credential does.
 	PinnedTextModel string
 
+	// Preference is the order this account wants its own providers tried in,
+	// per role. Empty means no preference, which is every account that has only
+	// one credential for a job and therefore never had to think about it.
+	//
+	// It exists because the fallback rule — "whichever credential exists" — had
+	// to choose an order, and that order was written into the code by whoever
+	// wrote the line. It was a guess about what somebody would want, and it was
+	// invisible to the person it decided for.
+	Preference Preference
+
 	// Anthropic and OpenAI, reached with the user's own credential. Anthropic
 	// accepts either a console API key or an OAuth token; the adapter tells
 	// them apart and sends the matching header.

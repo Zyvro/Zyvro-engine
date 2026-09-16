@@ -57,7 +57,29 @@ func (c *Config) resolveTextProvider(requested string) string {
 			return codexCLIProvider
 		}
 	}
-	return "ollama"
+	return c.PreferredOrDefault("text", func(p string) bool {
+		return strings.TrimSpace(c.TextCredentialFor(p)) != ""
+	}, func() string { return "ollama" })
+}
+
+// TextCredentialFor answers for one named provider without resolving, which is
+// what a preference walk needs: resolving would call back into this and loop.
+func (c *Config) TextCredentialFor(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "anthropic":
+		return c.AnthropicAPIKey
+	case "openai":
+		return c.OpenAIAPIKey
+	case "ollama":
+		return c.OllamaAPIKey
+	case claudeCLIProvider, codexCLIProvider:
+		bin, _ := c.localCLIBinary(strings.ToLower(strings.TrimSpace(provider)))
+		if path, err := exec.LookPath(bin); err == nil {
+			return path
+		}
+		return ""
+	}
+	return ""
 }
 
 // LLMComplete sends a chat completion to whichever provider the request or the
