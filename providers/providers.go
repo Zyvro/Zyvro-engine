@@ -62,6 +62,16 @@ type Config struct {
 	// invisible to the person it decided for.
 	Preference Preference
 
+	// Endpoints are the OpenAI-compatible servers this run may use, keyed by
+	// provider id: Ollama on this machine, LM Studio, or one the person named
+	// themselves. See endpoints.go — they are one provider three times over,
+	// because the only thing that differs between them is the address.
+	//
+	// A map rather than three sets of fields: the ids are already a closed set
+	// listed one file over, and nine more fields here would be nine more places
+	// to forget one.
+	Endpoints map[string]Endpoint
+
 	// Anthropic and OpenAI, reached with the user's own credential. Anthropic
 	// accepts either a console API key or an OAuth token; the adapter tells
 	// them apart and sends the matching header.
@@ -301,6 +311,15 @@ func (c *Config) ollamaComplete(ctx context.Context, req LLMRequest) (*LLMRespon
 	if resp.StatusCode != 200 {
 		return nil, normalizeHTTPError(resp.StatusCode, raw)
 	}
+	return parseOpenAIStyleCompletion(raw, req.MaxTokens)
+}
+
+// parseOpenAIStyleCompletion reads the answer every OpenAI-shaped server sends.
+//
+// Shared rather than copied: Ollama's hosted endpoint, Ollama on this machine,
+// LM Studio and any custom server all answer in this shape, and four readers of
+// one format is three chances to disagree about what an empty answer means.
+func parseOpenAIStyleCompletion(raw []byte, maxTokens int) (*LLMResponse, error) {
 	var parsed ollamaChatResponse
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, fmt.Errorf("invalid LLM response: %s", truncate(string(raw), 200))
@@ -312,7 +331,7 @@ func (c *Config) ollamaComplete(ctx context.Context, req LLMRequest) (*LLMRespon
 		return nil, fmt.Errorf("empty LLM response")
 	}
 	choice := parsed.Choices[0]
-	if err := emptyCompletion(choice.Message.Content, len(choice.Message.ToolCalls), choice.FinishReason, parsed.Usage.CompletionTokens, req.MaxTokens); err != nil {
+	if err := emptyCompletion(choice.Message.Content, len(choice.Message.ToolCalls), choice.FinishReason, parsed.Usage.CompletionTokens, maxTokens); err != nil {
 		return nil, err
 	}
 	return &LLMResponse{

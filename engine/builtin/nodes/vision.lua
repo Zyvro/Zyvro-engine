@@ -17,7 +17,10 @@ return {
     -- Ollama serves today are vision-capable. Empty means "whichever key this
     -- run actually carries", which is also what makes the free allowance work.
     { key = "provider", label = "Provider", type = "select", default = "",
-      options = { "", "google", "ollama", "openai" } },
+      -- The last three are servers on the machine running the engine: Ollama
+      -- on this computer, LM Studio, or any address the person entered. They
+      -- are the only way to ask about an image without the image leaving it.
+      options = { "", "google", "ollama", "openai", "ollama-local", "lmstudio", "custom" } },
     { key = "model", label = "Model", type = "text", default = "" },
   },
 

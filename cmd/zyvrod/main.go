@@ -201,6 +201,17 @@ func (d *daemon) providerConfig() *providers.Config {
 	if p, err := d.store.Project(); err == nil && p.TextProvider != "" {
 		cfg.TextProvider = p.TextProvider
 	}
+
+	// The order the project chose, and the servers it talks to. Both were being
+	// saved and neither was reaching the engine: the panel showed a list runs
+	// did not follow.
+	cfg.Preference = providers.Preference(d.store.ProviderOrder())
+	if stored := d.store.ProviderEndpoints(); len(stored) > 0 {
+		cfg.Endpoints = map[string]providers.Endpoint{}
+		for id, e := range stored {
+			cfg.Endpoints[id] = providers.Endpoint{URL: e.URL, Key: e.Key, Model: e.Model}
+		}
+	}
 	return &cfg
 }
 
@@ -273,6 +284,8 @@ func (d *daemon) handler() http.Handler {
 	api.HandleFunc("GET /api/workflows/{id}/executions/last", d.getLastExecution)
 	api.HandleFunc("GET /api/providers", d.listProviders)
 	api.HandleFunc("PUT /api/providers/order", d.setProviderOrder)
+	api.HandleFunc("PUT /api/providers/{id}/endpoint", d.setProviderEndpoint)
+	api.HandleFunc("GET /api/providers/{id}/models", d.providerModels)
 	api.HandleFunc("GET /api/secrets", d.listSecrets)
 	api.HandleFunc("PUT /api/secrets", d.setSecret)
 	api.HandleFunc("DELETE /api/secrets/{provider}", d.deleteSecret)
@@ -886,6 +899,13 @@ type providerInfo struct {
 	Roles     []string `json:"roles"`
 	IsDefault bool     `json:"is_default"`
 	Required  bool     `json:"required"`
+	// An endpoint provider is configured by an address and a model rather than
+	// by a key, so the panel has to draw it differently: two fields and a model
+	// list it can fetch, not a password box. The flag says which.
+	Endpoint    bool   `json:"endpoint,omitempty"`
+	EndpointURL string `json:"endpoint_url,omitempty"`
+	DefaultURL  string `json:"default_url,omitempty"`
+	Model       string `json:"model,omitempty"`
 }
 
 // localCatalog describes every provider the desktop app can use, in the
@@ -959,6 +979,27 @@ func (d *daemon) localCatalog() []providerInfo {
 			ConsoleURL: "https://developers.openai.com/codex/cli",
 			SetupHint:  "Install the Codex CLI so `codex` is on your PATH. Your subscription authenticates it; no key is stored here.",
 		},
+		{
+			ID:         providers.OllamaLocalProvider,
+			Label:      "Ollama (this machine)",
+			Purpose:    "Text generation and vision, on the models you have pulled locally.",
+			ConsoleURL: "https://ollama.com/download",
+			SetupHint:  "Run Ollama on this machine, then pick a model. Nothing is sent anywhere — which is the only way to ask about an image without the image leaving your computer.",
+		},
+		{
+			ID:         providers.LMStudioProvider,
+			Label:      "LM Studio (this machine)",
+			Purpose:    "Text generation and vision, on the models loaded in LM Studio.",
+			ConsoleURL: "https://lmstudio.ai",
+			SetupHint:  "Start LM Studio's local server, then pick a model. It speaks the same API as OpenAI, so everything here works the same way.",
+		},
+		{
+			ID:        providers.CustomProvider,
+			Label:     "Custom endpoint",
+			Purpose:   "Text generation and vision on any server speaking the OpenAI chat API — llama.cpp, vLLM, LocalAI, a box on your network.",
+			KeyHint:   "http://host:port/v1",
+			SetupHint: "Give the base address, including /v1. A key only if that server asks for one.",
+		},
 	}
 
 	// Which jobs are covered by something the run can actually use.
@@ -966,7 +1007,17 @@ func (d *daemon) localCatalog() []providerInfo {
 	for i := range catalog {
 		id := catalog[i].ID
 		eff := effectiveCredential(cfg, id)
-		if isCLIProvider(id) {
+		if isEndpointProvider(id) {
+			// There is no key to show four characters of: having an address is
+			// the whole of being configured. The address and model come back so
+			// the panel can show what this project is pointed at.
+			e := cfg.EndpointFor(id)
+			catalog[i].Endpoint = true
+			catalog[i].EndpointURL = e.URL
+			catalog[i].DefaultURL = providers.DefaultEndpointURL(id)
+			catalog[i].Model = e.Model
+			catalog[i].HasUserKey = eff != ""
+		} else if isCLIProvider(id) {
 			// A CLI provider has no key to store: being installed and signed in
 			// is the whole of its configuration, so there is nothing to show
 			// the last four characters of.
@@ -1051,10 +1102,28 @@ func effectiveCredential(cfg *providers.Config, id string) string {
 		// when it is not installed, which is exactly "not configured" here.
 		return cfg.TextCredential(id)
 	}
+	if isEndpointProvider(id) {
+		// An address is the credential. Ollama on this machine and LM Studio
+		// are configured the moment they are running, which is why they count
+		// as usable without anybody pasting anything.
+		return cfg.EndpointFor(id).URL
+	}
 	return ""
 }
 
 func isCLIProvider(id string) bool { return id == "claude-cli" || id == "codex-cli" }
+
+// isEndpointProvider says whether a provider is configured by an address rather
+// than by a key. Asked of the engine, not listed here, so adding a fourth one
+// there does not need a matching edit in this file.
+func isEndpointProvider(id string) bool {
+	for _, p := range providers.OpenAICompatibleProviders {
+		if p == id {
+			return true
+		}
+	}
+	return false
+}
 
 // last4 is how much of a credential is safe to show: enough to recognize which
 // key is configured, not enough to be worth leaking.
@@ -1116,6 +1185,69 @@ func (d *daemon) setProviderOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"order": clean})
+}
+
+// setProviderEndpoint records where one local server is and which model it
+// answers with by default.
+//
+// Clearing both fields is how one of these is turned off: they have no key to
+// delete, so "forget this provider" has to be spelled some other way, and an
+// empty address is the same statement the empty key box makes elsewhere.
+func (d *daemon) setProviderEndpoint(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !isEndpointProvider(id) {
+		writeErr(w, http.StatusBadRequest, "that provider is not configured by an address")
+		return
+	}
+	var req struct {
+		URL   string `json:"url"`
+		Key   string `json:"key"`
+		Model string `json:"model"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	url := strings.TrimSpace(req.URL)
+	if url != "" && !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		// Said here rather than at the first call: a bare host:port is the
+		// likeliest thing to type, and letting it through produces a transport
+		// error whose text is about a missing scheme rather than about the box
+		// that needs one.
+		writeErr(w, http.StatusBadRequest, "the address needs to start with http:// or https://")
+		return
+	}
+	if err := d.store.SetProviderEndpoint(id, localstore.Endpoint{
+		URL:   url,
+		Key:   strings.TrimSpace(req.Key),
+		Model: strings.TrimSpace(req.Model),
+	}); err != nil {
+		writeErr(w, http.StatusInternalServerError, "failed to save the endpoint")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"providers": d.localCatalog()})
+}
+
+// providerModels asks a local server what it can run.
+//
+// Asked of the server rather than listed anywhere: what is installed is the
+// person's business and changes whenever they pull something new, so any list
+// we shipped would be wrong by the end of the week.
+func (d *daemon) providerModels(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !isEndpointProvider(id) {
+		writeErr(w, http.StatusBadRequest, "that provider has no model list")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	models, err := d.providerConfig().ModelList(ctx, id)
+	if err != nil {
+		// The server's own words: "connection refused" means it is not running,
+		// and that is the answer somebody needs, not a generic failure.
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"models": models})
 }
 
 // knownProvider guards the secrets file against entries no run would ever read.

@@ -156,3 +156,60 @@ func TestLookingAtNothingIsRefused(t *testing.T) {
 		t.Fatal("a call with no image was accepted")
 	}
 }
+
+func TestALocalEndpointGetsItsOwnVisionModelAndAddress(t *testing.T) {
+	// The bug this rules out is the one the hosted backends already taught us:
+	// a model name belongs to one backend and means nothing to another. The
+	// deployment's OllamaModel is the name of a model on ollama.com, and the
+	// machine in front of the person has never heard of it.
+	srv, seen, auth := visionServer(t, "a dog")
+	c := &Config{
+		OllamaModel: "a-hosted-model",
+		OllamaURL:   "https://ollama.com",
+		Endpoints: map[string]Endpoint{
+			LMStudioProvider: {URL: srv.URL, Model: "qwen/qwen3-vl"},
+		},
+	}
+	answer, err := c.VisionAsk(context.Background(), LMStudioProvider, "", "what is this", [][]byte{{1, 2}}, []string{"image/png"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer != "a dog" {
+		t.Errorf("answer: %q", answer)
+	}
+	if seen.Model != "qwen/qwen3-vl" {
+		t.Errorf("asked %q — the hosted model name leaked to the local server", seen.Model)
+	}
+	if *auth != "" {
+		t.Errorf("sent Authorization: %q", *auth)
+	}
+	if len(seen.Messages) != 1 || len(seen.Messages[0].Content) != 2 {
+		t.Fatalf("parts: %+v", seen.Messages)
+	}
+	if !strings.HasPrefix(seen.Messages[0].Content[1].ImageURL.URL, "data:image/png;base64,") {
+		t.Errorf("the image was not inlined: %q", seen.Messages[0].Content[1].ImageURL.URL)
+	}
+}
+
+func TestALocalVisionCallWithNoModelIsRefused(t *testing.T) {
+	c := &Config{Endpoints: map[string]Endpoint{CustomProvider: {URL: "http://127.0.0.1:9/v1"}}}
+	_, err := c.VisionAsk(context.Background(), CustomProvider, "", "what is this", [][]byte{{1}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "no vision model chosen") {
+		t.Fatalf("expected a refusal naming the setting, got %v", err)
+	}
+}
+
+func TestALocalEndpointCountsAsAVisionCredential(t *testing.T) {
+	// Somebody running LM Studio and holding no key at all can still look at an
+	// image, and the guard that asks "is there a credential" must agree.
+	c := &Config{Endpoints: map[string]Endpoint{LMStudioProvider: {Model: "m"}}}
+	if c.VisionCredential(LMStudioProvider) == "" {
+		t.Error("a configured local endpoint reads as no credential")
+	}
+	if !c.hasVisionCredential(LMStudioProvider) {
+		t.Error("hasVisionCredential says no")
+	}
+	if got := c.ResolvedVisionProvider(LMStudioProvider); got != LMStudioProvider {
+		t.Errorf("resolved to %q", got)
+	}
+}

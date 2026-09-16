@@ -28,7 +28,15 @@ import (
 // VisionProviders is the set of backends that can answer a question about an
 // image. Named here and derived elsewhere, so a list of them never has to be
 // written down twice.
-var VisionProviders = []string{"google", "ollama", "openai"}
+var VisionProviders = append(
+	[]string{"google", "ollama", "openai"},
+	// The same three endpoints that serve text serve vision, because the
+	// endpoint does: /v1/chat/completions takes a string or a list of parts,
+	// and which one it gets is the only difference. A model on your own machine
+	// is also the only way to ask a question about an image without the image
+	// leaving it.
+	OpenAICompatibleProviders...,
+)
 
 // resolveVisionProvider picks the backend for one call: the request's own
 // choice first, then the deployment default for text (which is where an
@@ -47,6 +55,12 @@ func (c *Config) resolveVisionProvider(requested string) string {
 			return "ollama"
 		case "openai", "chatgpt":
 			return "openai"
+		case OllamaLocalProvider:
+			return OllamaLocalProvider
+		case LMStudioProvider:
+			return LMStudioProvider
+		case CustomProvider:
+			return CustomProvider
 		}
 	}
 	// The account's own order first; failing that, a credential that is present
@@ -74,6 +88,8 @@ func (c *Config) hasVisionCredential(provider string) bool {
 		return strings.TrimSpace(c.OllamaAPIKey) != "" || strings.TrimSpace(c.OllamaURL) != ""
 	case "openai":
 		return strings.TrimSpace(c.OpenAIAPIKey) != ""
+	case OllamaLocalProvider, LMStudioProvider, CustomProvider:
+		return c.EndpointConfigured(provider)
 	}
 	return false
 }
@@ -92,7 +108,7 @@ func (c *Config) ResolvedVisionProvider(requested string) string {
 // Ollama is the exception and deliberately so: a local Ollama needs no key at
 // all, and demanding one would refuse the one setup that costs nothing.
 func (c *Config) VisionCredential(provider string) string {
-	switch c.resolveVisionProvider(provider) {
+	switch p := c.resolveVisionProvider(provider); p {
 	case "ollama":
 		if key := strings.TrimSpace(c.OllamaAPIKey); key != "" {
 			return key
@@ -100,6 +116,8 @@ func (c *Config) VisionCredential(provider string) string {
 		return strings.TrimSpace(c.OllamaURL)
 	case "openai":
 		return strings.TrimSpace(c.OpenAIAPIKey)
+	case OllamaLocalProvider, LMStudioProvider, CustomProvider:
+		return c.endpointFor(p).URL
 	default:
 		return strings.TrimSpace(c.GoogleAPIKey)
 	}
@@ -115,11 +133,9 @@ func (c *Config) VisionAsk(ctx context.Context, provider, model, instruction str
 	if len(images) == 0 {
 		return "", fmt.Errorf("no image to look at")
 	}
-	switch c.resolveVisionProvider(provider) {
-	case "ollama":
-		return c.openAIStyleVision(ctx, "ollama", model, instruction, images, mimeTypes)
-	case "openai":
-		return c.openAIStyleVision(ctx, "openai", model, instruction, images, mimeTypes)
+	switch p := c.resolveVisionProvider(provider); p {
+	case "ollama", "openai", OllamaLocalProvider, LMStudioProvider, CustomProvider:
+		return c.openAIStyleVision(ctx, p, model, instruction, images, mimeTypes)
 	default:
 		return c.GeminiVision(ctx, model, instruction, images, mimeTypes)
 	}
@@ -171,8 +187,16 @@ func (c *Config) openAIStyleVision(ctx context.Context, backend, model, instruct
 		})
 	}
 
+	chosen := c.visionModelFor(backend, model)
+	if chosen == "" && isOpenAICompatible(backend) {
+		// Same refusal the text half makes, for the same reason: an empty model
+		// reaches the server and comes back as an error about the model rather
+		// than about the setting nobody filled in. The hosted backends are
+		// different — they have a default of their own, so "" is an answer.
+		return "", fmt.Errorf("%s has no vision model chosen — pick one in the provider settings", backend)
+	}
 	payload := visionRequest{
-		Model:    c.visionModelFor(backend, model),
+		Model:    chosen,
 		Messages: []visionMessage{{Role: "user", Content: parts}},
 	}
 	body, err := json.Marshal(payload)
@@ -221,11 +245,23 @@ func (c *Config) visionModelFor(backend, requested string) string {
 	if backend == "openai" {
 		return strings.TrimSpace(c.OpenAIModel)
 	}
+	if isOpenAICompatible(backend) {
+		// Each endpoint's own default. Nothing else would do: the model
+		// installed on this laptop has no relation to the one this deployment
+		// names for hosted Ollama.
+		return strings.TrimSpace(c.endpointFor(backend).Model)
+	}
 	return strings.TrimSpace(c.OllamaModel)
 }
 
 // visionEndpoint is where the request goes and what authenticates it.
 func (c *Config) visionEndpoint(backend string) (url, key string) {
+	if isOpenAICompatible(backend) {
+		// The address the person gave already carries its version segment, the
+		// same as OpenAIBaseURL below, so only the path is appended.
+		e := c.endpointFor(backend)
+		return e.URL + "/chat/completions", e.Key
+	}
 	if backend == "openai" {
 		// OpenAIBaseURL already carries the version segment, which is why this
 		// appends only the path and not another /v1.
@@ -240,6 +276,28 @@ func (c *Config) visionEndpoint(backend string) (url, key string) {
 		base = "https://ollama.com"
 	}
 	return base + "/v1/chat/completions", strings.TrimSpace(c.OllamaAPIKey)
+}
+
+// getJSON asks an endpoint a question. Same rules as postJSON: a bearer token
+// only when there is one, because a server on your own machine needs none.
+func getJSON(ctx context.Context, url, key string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if resp.StatusCode != 200 {
+		return nil, normalizeHTTPError(resp.StatusCode, raw)
+	}
+	return raw, nil
 }
 
 // postJSON sends one request and hands back the body. A bearer token is

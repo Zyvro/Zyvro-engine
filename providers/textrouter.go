@@ -12,7 +12,11 @@ import (
 // file is the only place the choice is made.
 
 // TextProviders is the set of providers that can back a text node or the Brain.
-var TextProviders = []string{"ollama", "anthropic", "openai", claudeCLIProvider, codexCLIProvider}
+var TextProviders = []string{
+	"ollama", "anthropic", "openai",
+	claudeCLIProvider, codexCLIProvider,
+	OllamaLocalProvider, LMStudioProvider, CustomProvider,
+}
 
 // LocalOnlyTextProviders are the subprocess ones: they run a command line tool
 // and so only work where the engine runs on the user's own machine.
@@ -22,7 +26,15 @@ var TextProviders = []string{"ollama", "anthropic", "openai", claudeCLIProvider,
 // lists mean one of them is wrong the day a provider is added — the engine
 // would grow a fourth hosted backend and the hosted service would quietly go on
 // refusing it.
-var LocalOnlyTextProviders = []string{claudeCLIProvider, codexCLIProvider}
+// The OpenAI-compatible endpoints are local too, and for a sharper reason than
+// the CLIs: a hosted service cannot reach a server on somebody's laptop, and
+// letting an account name an arbitrary URL for the server to call would be
+// handing it a way to probe the inside of our own network. They belong to the
+// machine the person is sitting at.
+var LocalOnlyTextProviders = append(
+	[]string{claudeCLIProvider, codexCLIProvider},
+	OpenAICompatibleProviders...,
+)
 
 // HostedTextProviders is TextProviders minus the ones that need a local
 // machine: what a server can actually offer.
@@ -55,6 +67,12 @@ func (c *Config) resolveTextProvider(requested string) string {
 			return claudeCLIProvider
 		case codexCLIProvider:
 			return codexCLIProvider
+		case OllamaLocalProvider:
+			return OllamaLocalProvider
+		case LMStudioProvider:
+			return LMStudioProvider
+		case CustomProvider:
+			return CustomProvider
 		}
 	}
 	return c.PreferredOrDefault("text", func(p string) bool {
@@ -78,6 +96,10 @@ func (c *Config) TextCredentialFor(provider string) string {
 			return path
 		}
 		return ""
+	case OllamaLocalProvider, LMStudioProvider, CustomProvider:
+		// There is no secret. Having an address is the whole of being
+		// configured, and callers only ever test this for emptiness.
+		return c.endpointFor(strings.ToLower(strings.TrimSpace(provider))).URL
 	}
 	return ""
 }
@@ -97,6 +119,8 @@ func (c *Config) LLMComplete(ctx context.Context, req LLMRequest) (*LLMResponse,
 		return c.openAIComplete(ctx, req)
 	case claudeCLIProvider, codexCLIProvider:
 		return c.localCLIComplete(ctx, req, p)
+	case OllamaLocalProvider, LMStudioProvider, CustomProvider:
+		return c.openAICompatibleComplete(ctx, p, req)
 	default:
 		return c.ollamaComplete(ctx, req)
 	}
