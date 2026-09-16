@@ -39,6 +39,11 @@ func (c *Config) resolveTextProvider(requested string) string {
 // LLMComplete sends a chat completion to whichever provider the request or the
 // deployment selects, and returns one common response shape.
 func (c *Config) LLMComplete(ctx context.Context, req LLMRequest) (*LLMResponse, error) {
+	// A pinned model wins over the node's choice. It is only ever set on a run
+	// the platform pays for; see the field's own comment.
+	if m := strings.TrimSpace(c.PinnedTextModel); m != "" {
+		req.Model = m
+	}
 	switch p := c.resolveTextProvider(req.Provider); p {
 	case "anthropic":
 		return c.anthropicComplete(ctx, req)

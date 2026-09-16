@@ -45,6 +45,13 @@ type Config struct {
 	// ImageProvider is the deployment default when a node names no provider.
 	ImageProvider string
 
+	// PinnedTextModel forces every text call onto one model, whatever a node
+	// asked for. It exists for runs the platform pays for: a free allowance
+	// where a node could name the most expensive model on the endpoint is not
+	// an allowance, it is an invitation. Empty means the node chooses, which is
+	// what every run on somebody's own credential does.
+	PinnedTextModel string
+
 	// Anthropic and OpenAI, reached with the user's own credential. Anthropic
 	// accepts either a console API key or an OAuth token; the adapter tells
 	// them apart and sends the matching header.

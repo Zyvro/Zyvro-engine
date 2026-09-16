@@ -1,6 +1,11 @@
 package providers
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 )
@@ -40,5 +45,44 @@ func TestFromEnvHonoursOverrides(t *testing.T) {
 	}
 	if cfg.OllamaSmallModel != "some-small-model" {
 		t.Errorf("OllamaSmallModel = %q", cfg.OllamaSmallModel)
+	}
+}
+
+// A run the platform pays for pins its model. A free allowance where a node
+// could name the most expensive model on the endpoint is not an allowance.
+func TestAPinnedModelOverridesWhateverTheNodeAsked(t *testing.T) {
+	var sent string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		sent = body.Model
+		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	defer srv.Close()
+
+	pinned := &Config{OllamaURL: srv.URL, OllamaAPIKey: "k", OllamaModel: "deployment-default", PinnedTextModel: "the-pinned-one"}
+	if _, err := pinned.LLMComplete(context.Background(), LLMRequest{
+		Model:    "something-expensive",
+		Messages: []Message{{Role: "user", Content: "hi"}},
+	}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if sent != "the-pinned-one" {
+		t.Fatalf("model = %q, want the pinned one", sent)
+	}
+
+	// With nothing pinned the node still chooses, which is what every run on
+	// somebody's own credential does.
+	free := &Config{OllamaURL: srv.URL, OllamaAPIKey: "k", OllamaModel: "deployment-default"}
+	if _, err := free.LLMComplete(context.Background(), LLMRequest{
+		Model:    "their-choice",
+		Messages: []Message{{Role: "user", Content: "hi"}},
+	}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if sent != "their-choice" {
+		t.Fatalf("model = %q, want the node's own", sent)
 	}
 }
