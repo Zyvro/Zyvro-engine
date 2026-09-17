@@ -77,6 +77,14 @@ func (c *Config) ImageGenerate(ctx context.Context, provider, model, prompt, asp
 	}
 }
 
+// ResolvedImageProvider says which backend a request would land on, so a caller
+// can decide what else to send with it — a model name, in particular, which
+// belongs to one backend and means nothing to another. It mirrors
+// ResolvedVisionProvider.
+func (c *Config) ResolvedImageProvider(requested string) string {
+	return c.resolveImageProvider(requested)
+}
+
 // ImageCredential returns the credential a backend would use, so a caller can
 // check it is present before starting work. It mirrors TextCredential.
 func (c *Config) ImageCredential(provider string) string {

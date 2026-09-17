@@ -527,7 +527,14 @@ func (r *Runtime) runGenerateImage(ctx context.Context, in *RunInput) (*NodeOutp
 	if prompt == "" {
 		return nil, fmt.Errorf("generate image needs a prompt")
 	}
-	model := strDefault(in.Config["model"], r.imageModel())
+	// The deployment's image model is Gemini's — its environment variable says
+	// so — and handing that name to Black Forest Labs or to a diffusion server
+	// on this machine would be handing over a name nobody there has heard of.
+	// An empty string is a real answer: it lets the backend use its own.
+	model := str(in.Config["model"])
+	if model == "" && r.Providers != nil && r.Providers.ResolvedImageProvider(str(in.Config["provider"])) == "google" {
+		model = r.imageModel()
+	}
 	aspect := strDefault(in.Config["aspectRatio"], "1:1")
 	imageSize := strDefault(in.Config["imageSize"], "1K")
 
@@ -592,8 +599,18 @@ func (r *Runtime) runEditImage(ctx context.Context, in *RunInput) (*NodeOutput, 
 	if prompt == "" {
 		return nil, fmt.Errorf("edit image needs a prompt")
 	}
-	model := strDefault(in.Config["model"], r.imageModel())
-	img, err := r.Providers.GeminiImageGenerate(ctx, model, prompt, "", "1K", []providers.ImageResult{{Data: data, MimeType: mime}})
+	// Editing was Gemini's alone, on the reasoning that it had no equivalent
+	// elsewhere. It has: an image and a prompt in, an image out, is what a
+	// FLUX.2 Klein does on somebody's own machine and what Black Forest Labs'
+	// hosted API does too. Routed like generation, which is the same call with
+	// the source as its reference.
+	provider := str(in.Config["provider"])
+	model := str(in.Config["model"])
+	if model == "" && r.Providers != nil && r.Providers.ResolvedImageProvider(provider) == "google" {
+		model = r.imageModel()
+	}
+	img, err := r.Providers.ImageGenerate(ctx, provider, model, prompt, "", "1K",
+		[]providers.ImageResult{{Data: data, MimeType: mime}})
 	if err != nil {
 		return nil, fmt.Errorf("image edit failed: %w", err)
 	}
