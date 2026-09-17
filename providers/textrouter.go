@@ -36,6 +36,13 @@ var LocalOnlyProviders = append(
 	AddressConfiguredProviders...,
 )
 
+// IsCLIProvider says whether a provider is a command line tool this engine
+// drives as a subprocess. Asked here rather than listed by each caller: the
+// daemon's catalogue had its own copy of this answer.
+func IsCLIProvider(provider string) bool {
+	return provider == claudeCLIProvider || provider == codexCLIProvider
+}
+
 // HostedTextProviders is TextProviders minus the ones that need a local
 // machine: what a server can actually offer.
 func HostedTextProviders() []string { return hostedOnly(TextProviders) }

@@ -113,9 +113,89 @@ func TestTextFollowsThePreferenceToo(t *testing.T) {
 	if got := cfg.resolveTextProvider(""); got != "openai" {
 		t.Fatalf("text went to %q despite the account asking for openai first", got)
 	}
-	// And the old behaviour is intact for an account that said nothing.
+	// An account that said nothing gets the deployment's own rule — as long as
+	// that rule names something this run can use. It used to be obeyed even
+	// when it named a provider with no credential, which sent an account
+	// holding two working keys to a third backend it had never configured.
 	plain := &Config{AnthropicAPIKey: "a", OpenAIAPIKey: "x"}
-	if got := plain.resolveTextProvider(""); got != "ollama" {
-		t.Fatalf("the text fallback changed: %q", got)
+	if got := plain.resolveTextProvider(""); got != "anthropic" {
+		t.Fatalf("text went to %q rather than to a backend this run can use", got)
+	}
+	// And the rule is still the rule when it is usable: a run carrying the
+	// lent Ollama key keeps going to Ollama, which is what pays for it.
+	lent := &Config{AnthropicAPIKey: "a", OllamaAPIKey: "lent"}
+	if got := lent.resolveTextProvider(""); got != "ollama" {
+		t.Fatalf("the deployment's own rule was ignored: %q", got)
+	}
+}
+
+// Somebody whose only backend is a server on their own machine.
+//
+// This is the complaint that made vision stop being Gemini's alone, one layer
+// down: the routers' own rules name a fixed hosted provider, so a person
+// running LM Studio and holding no key at all was told to go and get a key for
+// a backend they had never asked for — for all three jobs.
+func TestTheOnlyBackendSomebodyHasIsTheOneThatIsUsed(t *testing.T) {
+	local := &Config{Endpoints: map[string]Endpoint{
+		LMStudioProvider:    {Model: "qwen"},
+		CustomImageProvider: {URL: "http://127.0.0.1:8000/v1"},
+	}}
+	if got := local.resolveTextProvider(""); got != LMStudioProvider {
+		t.Errorf("text went to %q", got)
+	}
+	if got := local.resolveVisionProvider(""); got != LMStudioProvider {
+		t.Errorf("vision went to %q", got)
+	}
+	if got := local.resolveImageProvider(""); got != CustomImageProvider {
+		t.Errorf("image went to %q", got)
+	}
+
+	// A hosted credential still wins when there is one: every role's list puts
+	// the hosted backends first, so nothing changes for a deployment that has
+	// them.
+	both := &Config{
+		GoogleAPIKey: "g",
+		Endpoints:    map[string]Endpoint{LMStudioProvider: {Model: "qwen"}},
+	}
+	if got := both.resolveVisionProvider(""); got != "google" {
+		t.Errorf("vision left google for %q", got)
+	}
+
+	// And with nothing at all configured, the rule's own answer is what comes
+	// back: it is what the "no key for this" error will name.
+	empty := &Config{}
+	if got := empty.resolveVisionProvider(""); got != "google" {
+		t.Errorf("an empty config resolved to %q", got)
+	}
+	if got := empty.resolveTextProvider(""); got != "ollama" {
+		t.Errorf("an empty config resolved to %q", got)
+	}
+}
+
+// A command line tool on the PATH was installed for something else.
+//
+// Spending somebody's Claude or ChatGPT subscription because a binary happens
+// to exist is a decision that belongs to them, and it would be taken silently:
+// nothing in the app would say why a text node started talking to a
+// subprocess. Named by a node or by their own order it runs, which is what
+// naming it means.
+func TestAnInstalledCLIIsNeverChosenUnasked(t *testing.T) {
+	// Both installed and signed in, and nothing else at all configured.
+	installed := fakeCLI(t, "echo '{}'")
+	c := &Config{ClaudeCLIPath: installed, CodexCLIPath: installed}
+	if c.TextCredentialFor("claude-cli") == "" {
+		t.Fatal("the fixture did not make the CLI look installed")
+	}
+	if got := c.resolveTextProvider(""); got != "ollama" {
+		t.Errorf("an installed CLI was picked unasked: %q", got)
+	}
+
+	// Asked for, it is used.
+	if got := c.resolveTextProvider("claude-cli"); got != "claude-cli" {
+		t.Errorf("a node naming the CLI went to %q", got)
+	}
+	named := &Config{ClaudeCLIPath: installed, Preference: Preference{"text": {"claude-cli"}}}
+	if got := named.resolveTextProvider(""); got != "claude-cli" {
+		t.Errorf("an order naming the CLI went to %q", got)
 	}
 }

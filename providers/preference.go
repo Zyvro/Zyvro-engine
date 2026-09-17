@@ -44,12 +44,64 @@ func (c *Config) firstAvailable(role string, has func(provider string) bool) str
 	return ""
 }
 
+// ProvidersFor is the set of providers that can do one job.
+//
+// One place, because the three routers, the daemon's catalogue and the hosted
+// service all ask this same question, and the copy that is written down a
+// fourth time is the one that is wrong the day a provider is added.
+func ProvidersFor(role string) []string {
+	switch role {
+	case "text":
+		return TextProviders
+	case "image":
+		return ImageProviders
+	case "vision":
+		return VisionProviders
+	}
+	return nil
+}
+
 // PreferredOrDefault is the shape every router uses: a person's order first,
 // their own rule second. Kept in one place so the three cannot drift into
 // disagreeing about what a preference means.
+//
+// The third step is the one that had to be added. Each router's own rule names
+// a fixed provider — "ollama" for text, "google" for images and for vision —
+// and a fixed name is a guess that stops being true the moment somebody's only
+// backend is one the rule has never heard of. Somebody running LM Studio on
+// their laptop and holding no key at all was told to go and get an Ollama key,
+// which is exactly the complaint that made vision stop being Gemini's alone,
+// reappearing one layer down.
+//
+// So: a rule that names something usable is still obeyed, and only a rule that
+// names something this run cannot use gives way to whatever it can. The list
+// order decides, and every list puts the hosted backends first, so nothing
+// changes for a deployment that has one.
 func (c *Config) PreferredOrDefault(role string, has func(string) bool, fallback func() string) string {
 	if picked := c.firstAvailable(role, has); picked != "" {
 		return picked
 	}
-	return fallback()
+	picked := fallback()
+	if has(picked) {
+		return picked
+	}
+	for _, p := range ProvidersFor(role) {
+		if IsCLIProvider(p) {
+			// Not chosen for somebody. A pasted key or a typed address is an
+			// act of configuration inside this app; a command line tool on the
+			// PATH was installed for something else, and spending a person's
+			// subscription because a binary happens to exist is a decision
+			// that belongs to them. Named by a node or by their own order, it
+			// runs — that is what naming it means.
+			continue
+		}
+		if has(p) {
+			return p
+		}
+	}
+	// Nothing at all is configured. The rule's own answer is the right one to
+	// return: it is what the "no key for this" error will name, and naming the
+	// backend the deployment expects is more use than naming the last entry of
+	// a list.
+	return picked
 }

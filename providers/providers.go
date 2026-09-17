@@ -108,7 +108,7 @@ type Config struct {
 // FromEnv builds provider config from environment (server-side .creds).
 func FromEnv() *Config {
 	return &Config{
-		OllamaURL:    getEnv("OLLAMA_URL", "https://ollama.com"),
+		OllamaURL:    getEnv("OLLAMA_URL", DefaultOllamaURL),
 		OllamaAPIKey: os.Getenv("OLLAMA_API_KEY"),
 		OllamaModel:  getEnv("OLLAMA_MODEL", "qwen3.5:397b"),
 		// gemma4:31b answers this kind of one-liner in ~25 tokens. The other
@@ -182,6 +182,12 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
+
+// DefaultOllamaURL is Ollama's hosted service, where every install points when
+// nobody has said otherwise. Named because two places have to tell it apart
+// from an address somebody actually typed: the one that fills it in, and the
+// one that asks whether this deployment has an Ollama at all.
+const DefaultOllamaURL = "https://ollama.com"
 
 var httpClient = &http.Client{Timeout: 300 * time.Second}
 

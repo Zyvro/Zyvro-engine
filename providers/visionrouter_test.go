@@ -213,3 +213,39 @@ func TestALocalEndpointCountsAsAVisionCredential(t *testing.T) {
 		t.Errorf("resolved to %q", got)
 	}
 }
+
+// Every install carries Ollama's hosted address as its default, so counting
+// that address as a credential made hosted Ollama look configured everywhere.
+// Vision, whose fallback prefers whatever is configured, went there from
+// machines holding no key at all and came back "Unauthorized" — while the
+// server the person actually configured sat unused on their own machine.
+func TestTheDefaultOllamaAddressIsNotACredential(t *testing.T) {
+	fresh := &Config{OllamaURL: DefaultOllamaURL}
+	if fresh.hasVisionCredential("ollama") {
+		t.Error("a fresh install claims to have an Ollama")
+	}
+	if got := fresh.resolveVisionProvider(""); got != "google" {
+		t.Errorf("vision went to %q on an install with nothing configured", got)
+	}
+
+	// A key is a credential.
+	keyed := &Config{OllamaURL: DefaultOllamaURL, OllamaAPIKey: "k"}
+	if !keyed.hasVisionCredential("ollama") {
+		t.Error("a key is not enough")
+	}
+	// An address somebody typed is a credential: their own Ollama needs none.
+	own := &Config{OllamaURL: "http://192.168.1.20:11434"}
+	if !own.hasVisionCredential("ollama") {
+		t.Error("a self-hosted Ollama reads as unconfigured")
+	}
+
+	// And the whole point: with only a local endpoint configured, that is
+	// where a vision node with nothing named lands.
+	local := &Config{
+		OllamaURL: DefaultOllamaURL,
+		Endpoints: map[string]Endpoint{CustomProvider: {URL: "http://127.0.0.1:11434/v1", Model: "gemma3:4b"}},
+	}
+	if got := local.resolveVisionProvider(""); got != CustomProvider {
+		t.Errorf("vision went to %q rather than to the only backend configured", got)
+	}
+}

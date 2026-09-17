@@ -70,7 +70,7 @@ func (c *Config) resolveVisionProvider(requested string) string {
 		if strings.TrimSpace(c.GoogleAPIKey) != "" {
 			return "google"
 		}
-		if strings.TrimSpace(c.OllamaAPIKey) != "" || strings.TrimSpace(c.OllamaURL) != "" {
+		if c.hasOllama() {
 			return "ollama"
 		}
 		if strings.TrimSpace(c.OpenAIAPIKey) != "" {
@@ -80,12 +80,28 @@ func (c *Config) resolveVisionProvider(requested string) string {
 	})
 }
 
+// hasOllama says whether this deployment has an Ollama it can actually use.
+//
+// A key, or an address somebody typed. Not the default address: every install
+// carries that one, so counting it made hosted Ollama look configured
+// everywhere — and vision, whose fallback prefers whatever is configured, went
+// there from machines that had no key at all and came back "Unauthorized". A
+// default is where to go once you have somewhere to go; it is not evidence
+// that anybody chose it.
+func (c *Config) hasOllama() bool {
+	if strings.TrimSpace(c.OllamaAPIKey) != "" {
+		return true
+	}
+	url := strings.TrimSpace(c.OllamaURL)
+	return url != "" && url != DefaultOllamaURL
+}
+
 func (c *Config) hasVisionCredential(provider string) bool {
 	switch provider {
 	case "google":
 		return strings.TrimSpace(c.GoogleAPIKey) != ""
 	case "ollama":
-		return strings.TrimSpace(c.OllamaAPIKey) != "" || strings.TrimSpace(c.OllamaURL) != ""
+		return c.hasOllama()
 	case "openai":
 		return strings.TrimSpace(c.OpenAIAPIKey) != ""
 	case OllamaLocalProvider, LMStudioProvider, CustomProvider:
@@ -273,7 +289,7 @@ func (c *Config) visionEndpoint(backend string) (url, key string) {
 	}
 	base := strings.TrimSuffix(strings.TrimSpace(c.OllamaURL), "/")
 	if base == "" {
-		base = "https://ollama.com"
+		base = DefaultOllamaURL
 	}
 	return base + "/v1/chat/completions", strings.TrimSpace(c.OllamaAPIKey)
 }

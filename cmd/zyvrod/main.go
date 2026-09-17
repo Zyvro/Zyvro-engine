@@ -1118,7 +1118,9 @@ func effectiveCredential(cfg *providers.Config, id string) string {
 	return ""
 }
 
-func isCLIProvider(id string) bool { return id == "claude-cli" || id == "codex-cli" }
+// isCLIProvider asks the engine, which is the same binary: a list of these here
+// would be a copy of a list one package away.
+func isCLIProvider(id string) bool { return providers.IsCLIProvider(id) }
 
 // isEndpointProvider says whether a provider is configured by an address rather
 // than by a key. Asked of the engine, not listed here, so adding a fourth one
