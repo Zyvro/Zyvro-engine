@@ -130,3 +130,73 @@ func TestLoadCacheAndReplay(t *testing.T) {
 		t.Fatal("A must not be replayable (failed in the previous run)")
 	}
 }
+
+func TestAnOverrideByNodeIDChangesTheFingerprint(t *testing.T) {
+	// Le cas vu pour de vrai : un agent demande d'exécuter un workflow avec un
+	// autre texte, en désignant le nœud par son identifiant — le seul nom
+	// disponible quand le nœud ne déclare pas de clé publique. Le nœud
+	// s'exécutait bien avec la nouvelle valeur, mais son empreinte ne bougeait
+	// pas : le cache rejouait la réponse d'avant, la course se déclarait
+	// réussie, et le résultat rendu était celui de l'exécution précédente.
+	//
+	// Un succès qui ment est le pire des symptômes : rien, nulle part, ne dit
+	// que la valeur demandée n'a pas servi.
+	g := smallGraph()
+	base, _, err := ComputeFingerprints(g, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	byID, _, err := ComputeFingerprints(g, map[string]any{"A": "un autre texte"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"A", "B", "C"} {
+		if base[id] == byID[id] {
+			t.Fatalf("**%s garde son empreinte** : la valeur demandée n'a pas servi, et le cache rend celle d'avant", id)
+		}
+	}
+
+	// L'étiquette est le troisième nom que l'exécution accepte, donc le
+	// troisième que l'empreinte doit reconnaître.
+	byLabel, _, err := ComputeFingerprints(g, map[string]any{"A": "un autre texte"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byLabel["A"] != byID["A"] {
+		t.Fatal("le même nœud, la même valeur, deux empreintes")
+	}
+
+	// Deux valeurs différentes, deux empreintes différentes.
+	other, _, _ := ComputeFingerprints(g, map[string]any{"A": "encore un autre"}, nil)
+	if other["A"] == byID["A"] {
+		t.Fatal("deux textes différents donnent la même empreinte")
+	}
+
+	// Et sans entrée d'exécution, rien ne bouge : les résultats déjà en cache
+	// restent valides.
+	again, _, _ := ComputeFingerprints(g, map[string]any{"autre-noeud": "x"}, nil)
+	for _, id := range []string{"A", "B", "C"} {
+		if again[id] != base[id] {
+			t.Fatalf("%s a changé alors que rien ne le concernait", id)
+		}
+	}
+}
+
+func TestAnOverrideAndTheRuntimeAgreeOnTheName(t *testing.T) {
+	// Une seule liste de noms : ce que l'exécution accepte est exactement ce
+	// que l'empreinte compte. Deux listes, et c'est le bug d'au-dessus.
+	g := smallGraph()
+	node := &g.Nodes[0]
+	for _, name := range []string{node.ID, "A"} {
+		inputs := map[string]any{name: "valeur"}
+		if _, _, ok := runtimeValueFor(node, inputs); !ok {
+			t.Fatalf("l'exécution ignore le nom %q", name)
+		}
+		fps, _, _ := ComputeFingerprints(g, inputs, nil)
+		plain, _, _ := ComputeFingerprints(g, nil, nil)
+		if fps["A"] == plain["A"] {
+			t.Fatalf("l'empreinte ignore le nom %q, que l'exécution accepte", name)
+		}
+	}
+}

@@ -90,14 +90,29 @@ func FingerprintOf(g *Graph, nodeID string, upstream []NodeFingerprint, runtimeI
 		h.Write([]byte("\n"))
 	}
 
-	// Runtime inputs the node itself consumes (input nodes read their
-	// value from the run inputs by key or node id/label).
+	// Runtime inputs the node itself consumes.
+	//
+	// Un nœud d'entrée accepte sa valeur sous trois noms — sa clé publique, son
+	// identifiant, son étiquette — et seule la clé publique entrait ici. Un
+	// nœud sans clé publique, remplacé par son identifiant, s'exécutait donc
+	// avec la nouvelle valeur et gardait l'empreinte de l'ancienne : le cache
+	// rejouait la réponse d'avant, et la course se déclarait réussie en rendant
+	// le résultat précédent, sans que rien ne le dise. C'est le pire des
+	// symptômes — un succès qui ment.
+	//
+	// La résolution est celle de runtimeValueFor, une seule fois, pour les deux
+	// questions.
 	if key := InputKey(n); key != "" {
+		// Écrit même sans valeur, et avant tout le reste : les empreintes déjà
+		// enregistrées pour ces nœuds-là restent valides octet pour octet.
 		h.Write([]byte("input:" + key + "\n"))
-		if v, ok := runtimeInputs[key]; ok {
-			fingerprintValue(h, v)
-			h.Write([]byte("\n"))
+	}
+	if key, v, ok := runtimeValueFor(n, runtimeInputs); ok {
+		if key != InputKey(n) {
+			h.Write([]byte("input:" + key + "\n"))
 		}
+		fingerprintValue(h, v)
+		h.Write([]byte("\n"))
 	}
 
 	// Upstream fingerprints, in a stable order.

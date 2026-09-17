@@ -288,18 +288,35 @@ func InputKey(n *GraphNode) string {
 	return ""
 }
 
-// runtimeInput looks up the caller-supplied value for an input node, trying
-// the input key first, then node id, then label. Values may be a plain
-// string or an object like {"text": "..."} / {"url": "..."} / {"dataUrl": "..."}.
-func (r *Runtime) runtimeInput(n *GraphNode) (string, bool) {
+// runtimeValueFor answers under which name a caller-supplied value reached
+// this input node, and what it was: the input key first, then node id, then
+// label.
+//
+// One list, and this is the list. The fingerprint asks the same question when
+// it decides whether a cached result still stands, and the two answers have to
+// be the same one: a node overridden under a name the fingerprint ignored runs
+// with the new value and hashes like the old one, so the cache replays the
+// previous answer — a run that reports success and returns what it returned
+// last time, with nothing anywhere to say so.
+func runtimeValueFor(n *GraphNode, inputs map[string]any) (string, any, bool) {
 	for _, key := range []string{InputKey(n), n.ID, str(n.Data["label"])} {
 		if key == "" {
 			continue
 		}
-		v, ok := r.Inputs[key]
+		v, ok := inputs[key]
 		if !ok || v == nil {
 			continue
 		}
+		return key, v, true
+	}
+	return "", nil, false
+}
+
+// runtimeInput looks up the caller-supplied value for an input node. Values may
+// be a plain string or an object like {"text": "..."} / {"url": "..."} /
+// {"dataUrl": "..."}.
+func (r *Runtime) runtimeInput(n *GraphNode) (string, bool) {
+	if _, v, ok := runtimeValueFor(n, r.Inputs); ok {
 		switch t := v.(type) {
 		case string:
 			return t, true
