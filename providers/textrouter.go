@@ -50,6 +50,9 @@ func HostedTextProviders() []string { return hostedOnly(TextProviders) }
 // HostedImageProviders is the same subtraction for image generation.
 func HostedImageProviders() []string { return hostedOnly(ImageProviders) }
 
+// HostedCompletionProviders is the same subtraction for code completion.
+func HostedCompletionProviders() []string { return hostedOnly(CompletionProviders) }
+
 // HostedVisionProviders is the same subtraction for vision.
 //
 // It exists because the local endpoints do both jobs, so the hosted service

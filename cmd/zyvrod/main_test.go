@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Zyvro/Zyvro-engine/localstore"
+	"github.com/Zyvro/Zyvro-engine/providers"
 )
 
 // providerFreeGraph is a textInput feeding an output node. It exercises the
@@ -548,8 +549,11 @@ func TestProvidersCatalogShape(t *testing.T) {
 			t.Errorf("provider %s has no role", p.ID)
 		}
 		for _, role := range p.Roles {
-			if role != "text" && role != "image" && role != "vision" {
-				t.Errorf("provider %s has role %q", p.ID, role)
+			// Les métiers sont ceux que le moteur nomme. Écrits ici à la main,
+			// ce test aurait refusé la complétion le jour où elle est arrivée
+			// — ce qu'il a d'ailleurs fait.
+			if len(providers.ProvidersFor(role)) == 0 {
+				t.Errorf("provider %s has role %q, which the engine does not know", p.ID, role)
 			}
 		}
 	}

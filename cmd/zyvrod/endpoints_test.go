@@ -42,7 +42,9 @@ func TestTheLocalEndpointsAreOfferedForTextAndVision(t *testing.T) {
 		if !p.Endpoint {
 			t.Errorf("%s is not marked as an address provider, so the panel would draw a key box", id)
 		}
-		want := "text,vision"
+		// Les trois serveurs OpenAI-compatibles font aussi la complétion de
+		// code : c'est la même route, avec un suffixe.
+		want := "text,vision,completion"
 		if id == providers.CustomImageProvider {
 			// The images half of the same API: a different shape, so a
 			// different job, and offering it for text would be the "you are

@@ -1069,6 +1069,7 @@ func localRolesOf(id string) []string {
 		{"text", providers.TextProviders},
 		{"image", providers.ImageProviders},
 		{"vision", providers.VisionProviders},
+		{"completion", providers.CompletionProviders},
 	} {
 		for _, candidate := range role.list {
 			if candidate == id {
@@ -1154,7 +1155,10 @@ func (d *daemon) listProviders(w http.ResponseWriter, r *http.Request) {
 }
 
 // setProviderOrder records which provider this project wants tried first for a
-// job. Only ids this engine can actually drive, for a job they can actually do:
+// job. Les métiers connus sont ceux que le moteur nomme — une liste écrite ici
+// aurait oublié la complétion le jour où elle est arrivée.
+//
+// Only ids this engine can actually drive, for a job they can actually do:
 // a list naming Black Forest Labs for vision would send every such call to a
 // backend that cannot answer, and nothing would say why.
 func (d *daemon) setProviderOrder(w http.ResponseWriter, r *http.Request) {
@@ -1171,7 +1175,7 @@ func (d *daemon) setProviderOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	clean := map[string][]string{}
 	for role, ids := range req.Order {
-		if role != "text" && role != "image" && role != "vision" {
+		if len(providers.ProvidersFor(role)) == 0 {
 			continue
 		}
 		seen := map[string]bool{}
