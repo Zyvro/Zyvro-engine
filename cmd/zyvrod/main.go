@@ -961,7 +961,7 @@ func (d *daemon) localCatalog() []providerInfo {
 		{
 			ID:         "ollama",
 			Label:      "Ollama Cloud",
-			Purpose:    "Text generation and the Brain agent, on open models.",
+			Purpose:    "Text generation, vision and code completion, on open models.",
 			KeyHint:    "Ollama API key",
 			ConsoleURL: "https://ollama.com/settings/keys",
 			SetupHint:  "Create a key in your Ollama account settings, or point OLLAMA_URL at an Ollama running on this machine.",
@@ -983,21 +983,21 @@ func (d *daemon) localCatalog() []providerInfo {
 		{
 			ID:         providers.OllamaLocalProvider,
 			Label:      "Ollama (this machine)",
-			Purpose:    "Text generation and vision, on the models you have pulled locally.",
+			Purpose:    "Text generation, vision and code completion, on the models you have pulled locally.",
 			ConsoleURL: "https://ollama.com/download",
 			SetupHint:  "Run Ollama on this machine, then pick a model. Nothing is sent anywhere — which is the only way to ask about an image without the image leaving your computer.",
 		},
 		{
 			ID:         providers.LMStudioProvider,
 			Label:      "LM Studio (this machine)",
-			Purpose:    "Text generation and vision, on the models loaded in LM Studio.",
+			Purpose:    "Text generation, vision and code completion, on the models loaded in LM Studio.",
 			ConsoleURL: "https://lmstudio.ai",
 			SetupHint:  "Start LM Studio's local server, then pick a model. It speaks the same API as OpenAI, so everything here works the same way.",
 		},
 		{
 			ID:        providers.CustomProvider,
 			Label:     "Custom endpoint",
-			Purpose:   "Text generation and vision on any server speaking the OpenAI chat API — llama.cpp, vLLM, LocalAI, a box on your network.",
+			Purpose:   "Text generation, vision and code completion on any server speaking the OpenAI API — llama.cpp, vLLM, LocalAI, a box on your network.",
 			KeyHint:   "http://host:port/v1",
 			SetupHint: "Give the base address, including /v1. A key only if that server asks for one.",
 		},
