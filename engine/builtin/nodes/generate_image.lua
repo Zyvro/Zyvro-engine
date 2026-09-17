@@ -23,7 +23,9 @@ return {
       label = "Provider",
       type = "select",
       default = "",
-      options = { "", "google", "bfl" },
+      -- custom-image is any server on this machine serving the OpenAI images
+      -- routes: the image and the references never leave the computer.
+      options = { "", "google", "bfl", "custom-image" },
     },
     { key = "model", label = "Model", type = "text", default = "" },
   },

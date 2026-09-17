@@ -1000,6 +1000,13 @@ func (d *daemon) localCatalog() []providerInfo {
 			KeyHint:   "http://host:port/v1",
 			SetupHint: "Give the base address, including /v1. A key only if that server asks for one.",
 		},
+		{
+			ID:        providers.CustomImageProvider,
+			Label:     "Custom image endpoint",
+			Purpose:   "Image generation and editing on any server speaking the OpenAI images API — a diffusion model on this machine, or one on your network.",
+			KeyHint:   "http://host:port/v1",
+			SetupHint: "Give the base address, including /v1. The server needs /v1/images/generations, and /v1/images/edits if you want to edit with reference images.",
+		},
 	}
 
 	// Which jobs are covered by something the run can actually use.
@@ -1117,7 +1124,7 @@ func isCLIProvider(id string) bool { return id == "claude-cli" || id == "codex-c
 // than by a key. Asked of the engine, not listed here, so adding a fourth one
 // there does not need a matching edit in this file.
 func isEndpointProvider(id string) bool {
-	for _, p := range providers.OpenAICompatibleProviders {
+	for _, p := range providers.AddressConfiguredProviders {
 		if p == id {
 			return true
 		}

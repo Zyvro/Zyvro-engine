@@ -18,8 +18,8 @@ var TextProviders = []string{
 	OllamaLocalProvider, LMStudioProvider, CustomProvider,
 }
 
-// LocalOnlyTextProviders are the subprocess ones: they run a command line tool
-// and so only work where the engine runs on the user's own machine.
+// LocalOnlyProviders are the ones that only work where the engine runs on the
+// user's own machine: the subprocess CLIs, and the servers listening on it.
 //
 // Said here rather than left for a caller to know, because a hosted service has
 // to keep this exact distinction and was keeping its own copy of the list. Two
@@ -31,14 +31,17 @@ var TextProviders = []string{
 // letting an account name an arbitrary URL for the server to call would be
 // handing it a way to probe the inside of our own network. They belong to the
 // machine the person is sitting at.
-var LocalOnlyTextProviders = append(
+var LocalOnlyProviders = append(
 	[]string{claudeCLIProvider, codexCLIProvider},
-	OpenAICompatibleProviders...,
+	AddressConfiguredProviders...,
 )
 
 // HostedTextProviders is TextProviders minus the ones that need a local
 // machine: what a server can actually offer.
 func HostedTextProviders() []string { return hostedOnly(TextProviders) }
+
+// HostedImageProviders is the same subtraction for image generation.
+func HostedImageProviders() []string { return hostedOnly(ImageProviders) }
 
 // HostedVisionProviders is the same subtraction for vision.
 //
@@ -49,11 +52,10 @@ func HostedTextProviders() []string { return hostedOnly(TextProviders) }
 func HostedVisionProviders() []string { return hostedOnly(VisionProviders) }
 
 // hostedOnly drops the providers that only exist on the machine the person is
-// sitting at. LocalOnlyTextProviders is the list of those; it is named for text
-// because that is where it started, and it is still the one list.
+// sitting at.
 func hostedOnly(all []string) []string {
 	local := map[string]bool{}
-	for _, p := range LocalOnlyTextProviders {
+	for _, p := range LocalOnlyProviders {
 		local[p] = true
 	}
 	out := make([]string, 0, len(all))

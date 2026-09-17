@@ -41,6 +41,7 @@ const (
 	OllamaLocalProvider = "ollama-local"
 	LMStudioProvider    = "lmstudio"
 	CustomProvider      = "custom"
+	CustomImageProvider = "custom-image"
 )
 
 // OpenAICompatibleProviders are the ones this file serves. They do both text
@@ -48,11 +49,26 @@ const (
 // string or a list of parts, and which one it gets is the only difference.
 var OpenAICompatibleProviders = []string{OllamaLocalProvider, LMStudioProvider, CustomProvider}
 
-// DefaultEndpointURL is where each one listens when nobody has said otherwise.
+// ImageEndpointProviders speak the other half of the same API: the images
+// routes, which are a different shape from chat and therefore a different
+// adapter — but the same protocol, the same setting, and the same promise that
+// nothing leaves the machine. imageendpoint.go serves them.
+var ImageEndpointProviders = []string{CustomImageProvider}
+
+// AddressConfiguredProviders is every provider configured by an address rather
+// than by a key, whichever job it does. The catalogue and the settings route
+// ask this rather than keeping their own idea of which providers have a URL.
+var AddressConfiguredProviders = append(
+	append([]string{}, OpenAICompatibleProviders...),
+	ImageEndpointProviders...,
+)
+
+// DefaultEndpointURL is where each address-configured provider listens when
+// nobody has said otherwise.
 //
-// The two known ports are the projects' own documented defaults, checked
-// against the running servers rather than recalled. Custom has none: the whole
-// point of it is that we do not know where it is.
+// The known ports are the projects' own documented defaults, checked against
+// the running servers rather than recalled. Custom has none: the whole point of
+// it is that we do not know where it is.
 func DefaultEndpointURL(provider string) string {
 	switch provider {
 	case OllamaLocalProvider:

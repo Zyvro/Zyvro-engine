@@ -11,7 +11,7 @@ import (
 // textrouter.go.
 
 // ImageProviders is the set of providers that can back an image node.
-var ImageProviders = []string{"google", "bfl"}
+var ImageProviders = append([]string{"google", "bfl"}, ImageEndpointProviders...)
 
 // resolveImageProvider picks the backend for one call: the node's own choice
 // first, then the deployment default, then whichever credential exists.
@@ -26,7 +26,12 @@ func (c *Config) resolveImageProvider(requested string) string {
 		case "google", "gemini":
 			return "google"
 		case "bfl", "blackforestlabs", "flux", "klein":
+			// "klein" stays Black Forest Labs': FLUX.2 Klein is their model, and
+			// the hosted API is where it runs unless somebody explicitly names
+			// the copy on their own machine.
 			return "bfl"
+		case CustomImageProvider:
+			return CustomImageProvider
 		}
 	}
 	return c.PreferredOrDefault("image", c.hasImageCredential, func() string {
@@ -43,6 +48,10 @@ func (c *Config) hasImageCredential(provider string) bool {
 		return strings.TrimSpace(c.GoogleAPIKey) != ""
 	case "bfl":
 		return strings.TrimSpace(c.BFLAPIKey) != ""
+	case CustomImageProvider:
+		// An address is the whole of it: a server on your own machine
+		// authenticates nobody.
+		return c.EndpointConfigured(CustomImageProvider)
 	}
 	return false
 }
@@ -56,6 +65,8 @@ func (c *Config) hasImageCredential(provider string) bool {
 // rejected request.
 func (c *Config) ImageGenerate(ctx context.Context, provider, model, prompt, aspectRatio, imageSize string, references []ImageResult) (*ImageResult, error) {
 	switch c.resolveImageProvider(provider) {
+	case CustomImageProvider:
+		return c.endpointImageGenerate(ctx, CustomImageProvider, model, prompt, aspectRatio, imageSize, references)
 	case "bfl":
 		if !bflModels[strings.ToLower(strings.TrimSpace(model))] {
 			model = BFLDefaultModel
@@ -69,8 +80,12 @@ func (c *Config) ImageGenerate(ctx context.Context, provider, model, prompt, asp
 // ImageCredential returns the credential a backend would use, so a caller can
 // check it is present before starting work. It mirrors TextCredential.
 func (c *Config) ImageCredential(provider string) string {
-	if c.resolveImageProvider(provider) == "bfl" {
+	switch p := c.resolveImageProvider(provider); p {
+	case "bfl":
 		return strings.TrimSpace(c.BFLAPIKey)
+	case CustomImageProvider:
+		return c.endpointFor(CustomImageProvider).URL
+	default:
+		return strings.TrimSpace(c.GoogleAPIKey)
 	}
-	return strings.TrimSpace(c.GoogleAPIKey)
 }

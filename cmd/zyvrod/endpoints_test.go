@@ -34,7 +34,7 @@ func decodeCatalog(t *testing.T, body []byte) map[string]providerInfo {
 func TestTheLocalEndpointsAreOfferedForTextAndVision(t *testing.T) {
 	e := newTestEnv(t)
 	got := decodeCatalog(t, e.do("GET", "/api/providers", nil).Body.Bytes())
-	for _, id := range providers.OpenAICompatibleProviders {
+	for _, id := range providers.AddressConfiguredProviders {
 		p, ok := got[id]
 		if !ok {
 			t.Fatalf("%s missing from the catalogue", id)
@@ -42,7 +42,14 @@ func TestTheLocalEndpointsAreOfferedForTextAndVision(t *testing.T) {
 		if !p.Endpoint {
 			t.Errorf("%s is not marked as an address provider, so the panel would draw a key box", id)
 		}
-		if strings.Join(p.Roles, ",") != "text,vision" {
+		want := "text,vision"
+		if id == providers.CustomImageProvider {
+			// The images half of the same API: a different shape, so a
+			// different job, and offering it for text would be the "you are
+			// covered" lie the vision split was fixed to stop telling.
+			want = "image"
+		}
+		if strings.Join(p.Roles, ",") != want {
 			t.Errorf("%s roles: %v", id, p.Roles)
 		}
 		if p.HasUserKey {
