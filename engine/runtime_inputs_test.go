@@ -42,3 +42,48 @@ func TestRuntimeInputResolution(t *testing.T) {
 		t.Fatalf("expected error for missing required image input")
 	}
 }
+
+func TestRuntimeInputTypesSaysTheTruth(t *testing.T) {
+	// La liste est un miroir : l'éditeur décide s'il propose un nom à un nœud,
+	// et c'est le moteur qui décide si ce nom sert. Une liste écrite à la main
+	// et jamais confrontée finit par promettre un nom qui ne remplit rien — ou
+	// par taire celui qui aurait marché.
+	//
+	// Alors on ne relit pas la liste : on exécute chacun de ses nœuds avec une
+	// valeur d'exécution et on regarde si elle a servi.
+	rt := &Runtime{Inputs: map[string]any{
+		"n":     "la valeur demandée",
+		"image": "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+	}}
+
+	for _, typ := range RuntimeInputTypes {
+		key := "n"
+		if typ == "imageInput" {
+			key = "image"
+		}
+		node := inputNode(key, typ, "", "", nil)
+		out, err := rt.executeWithInput(t.Context(), &RunInput{Node: &node, Config: nodeConfig(&node)})
+		if err != nil {
+			t.Fatalf("%s: %v", typ, err)
+		}
+		switch typ {
+		case "textInput":
+			if out.Value["text"] != "la valeur demandée" {
+				t.Errorf("**%s est annoncé comme remplissable et ne l'est pas** : %v", typ, out.Value)
+			}
+		case "imageInput":
+			if out.Type != "image" {
+				t.Errorf("**%s est annoncé comme remplissable et ne l'est pas** : %v", typ, out)
+			}
+		}
+	}
+
+	// fileInput n'y est pas, et c'est un choix : son chemin se paramètre par un
+	// {{input:…}} dans sa configuration, ce qui est un autre geste. L'y ajouter
+	// ferait proposer un nom qui ne remplirait rien.
+	for _, typ := range RuntimeInputTypes {
+		if typ == "fileInput" {
+			t.Error("fileInput ne lit pas les valeurs d'exécution par son nom")
+		}
+	}
+}

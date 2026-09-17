@@ -41,6 +41,7 @@ func main() {
 	port := flag.Int("port", 0, "port to listen on; 0 picks a free one")
 	showVersion := flag.Bool("version", false, "print the engine version and exit")
 	nodeTypes := flag.Bool("node-types", false, "print the node types this engine runs, one per line, and exit")
+	inputTypes := flag.Bool("runtime-input-types", false, "print the node types a run can fill by name, one per line, and exit")
 	flag.Parse()
 
 	// --version answers before anything else is checked. It is what an updater
@@ -60,6 +61,17 @@ func main() {
 	// add more, and those are not a property of the engine.
 	if *nodeTypes {
 		for _, t := range engine.RunnableBuiltinNodeTypes() {
+			fmt.Println(t)
+		}
+		return
+	}
+
+	// --runtime-input-types, pour la même raison : l'éditeur décide s'il propose
+	// un nom à un nœud, et c'est ce binaire qui décide si ce nom sert à quelque
+	// chose. Un nœud qu'un éditeur laisse sans nom est un nœud qu'aucune
+	// exécution ne peut remplir autrement qu'en désignant son identifiant.
+	if *inputTypes {
+		for _, t := range engine.RuntimeInputTypes {
 			fmt.Println(t)
 		}
 		return

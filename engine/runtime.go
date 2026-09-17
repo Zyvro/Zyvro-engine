@@ -278,6 +278,19 @@ func (r *Runtime) executeWithInput(ctx context.Context, in *RunInput) (*NodeOutp
 
 // ---------- Input nodes ----------
 
+// RuntimeInputTypes : les nœuds dont une exécution peut remplacer la valeur.
+//
+// Un workflow se pilote de l'extérieur par ces nœuds-là, et par eux seuls : le
+// panneau d'exécution, l'API et les outils MCP y versent ce qu'on leur donne.
+// Un `fileInput` n'y est pas — son chemin se paramètre par un `{{input:…}}`
+// dans sa configuration, ce qui est un autre geste.
+//
+// Elle est ici parce que l'éditeur en tient un miroir : c'est lui qui décide
+// s'il propose un nom à un nœud, et un miroir que personne ne compare finit par
+// différer. `zyvrod --runtime-input-types` la rend, et un test prouve qu'elle
+// dit vrai en exécutant chacun de ces nœuds avec une valeur d'exécution.
+var RuntimeInputTypes = []string{"imageInput", "textInput"}
+
 // InputKey is the public name of a runtime input node: the key callers use
 // in the run inputs map (UI run panel, REST, MCP). Empty means the node is
 // only addressable by node id / label (legacy).
