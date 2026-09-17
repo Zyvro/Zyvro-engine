@@ -289,6 +289,7 @@ func (d *daemon) handler() http.Handler {
 	api.HandleFunc("GET /api/secrets", d.listSecrets)
 	api.HandleFunc("PUT /api/secrets", d.setSecret)
 	api.HandleFunc("DELETE /api/secrets/{provider}", d.deleteSecret)
+	api.HandleFunc("POST /api/completion", d.codeCompletion)
 	api.HandleFunc("GET /api/ai/quota", d.aiQuota)
 	api.HandleFunc("GET /api/local/status", d.localStatus)
 	api.HandleFunc("GET /api/nodes", d.listNodes)
@@ -1212,15 +1213,28 @@ func (d *daemon) setProviderEndpoint(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "that provider is not configured by an address")
 		return
 	}
+	// Des pointeurs, et c'est tout l'intérêt : un champ absent n'est pas un
+	// champ vide.
+	//
+	// Le panneau enregistre une adresse sans toujours renvoyer le modèle — il
+	// ne l'a pas encore chargé, ou le catalogue l'omet parce qu'il est vide —
+	// et la version d'avant remplaçait l'entrée entière. Résultat : réenregistrer
+	// une adresse effaçait le modèle choisi, en silence, et la complétion
+	// suivante répondait « aucun modèle choisi » pour un réglage qu'on venait
+	// de voir à l'écran.
 	var req struct {
-		URL   string `json:"url"`
-		Key   string `json:"key"`
-		Model string `json:"model"`
+		URL   *string `json:"url"`
+		Key   *string `json:"key"`
+		Model *string `json:"model"`
 	}
 	if !readJSON(w, r, &req) {
 		return
 	}
-	url := strings.TrimSpace(req.URL)
+	current := d.store.ProviderEndpoints()[id]
+	url := strings.TrimSpace(current.URL)
+	if req.URL != nil {
+		url = strings.TrimSpace(*req.URL)
+	}
 	if url != "" && !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		// Said here rather than at the first call: a bare host:port is the
 		// likeliest thing to type, and letting it through produces a transport
@@ -1229,10 +1243,18 @@ func (d *daemon) setProviderEndpoint(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "the address needs to start with http:// or https://")
 		return
 	}
+	key := current.Key
+	if req.Key != nil {
+		key = strings.TrimSpace(*req.Key)
+	}
+	model := current.Model
+	if req.Model != nil {
+		model = strings.TrimSpace(*req.Model)
+	}
 	if err := d.store.SetProviderEndpoint(id, localstore.Endpoint{
 		URL:   url,
-		Key:   strings.TrimSpace(req.Key),
-		Model: strings.TrimSpace(req.Model),
+		Key:   key,
+		Model: model,
 	}); err != nil {
 		writeErr(w, http.StatusInternalServerError, "failed to save the endpoint")
 		return
@@ -1332,6 +1354,60 @@ func (d *daemon) aiQuota(w http.ResponseWriter, r *http.Request) {
 		"retry_after_seconds": 0,
 		"window_seconds":      0,
 	})
+}
+
+// codeCompletion remplit le milieu d'un fichier, pour l'éditeur.
+//
+// Une requête par frappe au repos, donc tout ici est taillé pour être court :
+// pas de trace dans le journal, pas d'exécution enregistrée, et une réponse
+// vide plutôt qu'une erreur quand il n'y a rien à proposer. Une complétion qui
+// n'aboutit pas ne doit rien coûter à lire.
+//
+// L'annulation vient du contexte de la requête : quand l'éditeur abandonne —
+// et il abandonne à chaque touche — la connexion se ferme, et l'appel au modèle
+// s'arrête avec elle.
+func (d *daemon) codeCompletion(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Prefix    string `json:"prefix"`
+		Suffix    string `json:"suffix"`
+		Provider  string `json:"provider"`
+		Model     string `json:"model"`
+		MaxTokens int    `json:"max_tokens"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+
+	// Un plafond de caractères plutôt qu'un plafond de jetons : le contexte
+	// utile est ce qui entoure le curseur, et envoyer un fichier de dix mille
+	// lignes à chaque frappe coûterait le temps qu'il met à voyager.
+	const window = 4000
+	prefix, suffix := req.Prefix, req.Suffix
+	if len(prefix) > window {
+		prefix = prefix[len(prefix)-window:]
+	}
+	if len(suffix) > window {
+		suffix = suffix[:window]
+	}
+
+	text, err := d.providerConfig().CodeCompletion(r.Context(), providers.CompletionRequest{
+		Provider:  req.Provider,
+		Model:     req.Model,
+		Prefix:    prefix,
+		Suffix:    suffix,
+		MaxTokens: req.MaxTokens,
+	})
+	if err != nil {
+		if errors.Is(r.Context().Err(), context.Canceled) {
+			// L'éditeur est passé à autre chose. Ce n'est pas un échec, et le
+			// dire en erreur ferait clignoter un message à chaque frappe.
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"text": text})
 }
 
 // localStatus backs the desktop status bar: which project is open, how much is
