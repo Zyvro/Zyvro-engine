@@ -188,9 +188,18 @@ func (d *daemon) providerConfig() *providers.Config {
 
 	if secrets, err := d.store.SecretValues(); err == nil {
 		for provider, value := range secrets {
+			// `bfl` manquait ici, et c'est le genre d'oubli que cette forme
+			// invite : une clé Black Forest Labs se stockait, le panneau
+			// affichait « Connected », et l'exécution répondait « no Black
+			// Forest Labs key is configured ». Rien ne reliait les deux, parce
+			// que ce switch est une seconde liste de fournisseurs à côté du
+			// catalogue — c'est ce que `TestEveryKeyProviderReachesTheConfig`
+			// compare maintenant, fournisseur par fournisseur.
 			switch provider {
 			case "google":
 				cfg.GoogleAPIKey = value
+			case "bfl":
+				cfg.BFLAPIKey = value
 			case "anthropic":
 				cfg.AnthropicAPIKey = value
 			case "openai":

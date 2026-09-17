@@ -320,3 +320,50 @@ func TestSavingAnAddressDoesNotForgetTheModel(t *testing.T) {
 		t.Error("disconnect no longer disconnects")
 	}
 }
+
+// Une clé collée dans le panneau doit arriver jusqu'à l'exécution.
+//
+// Elle n'y arrivait pas pour Black Forest Labs. La clé se stockait, le
+// catalogue répondait « Connected » — il lit le magasin — et l'exécution
+// répondait « no Black Forest Labs key is configured », parce que le pliage des
+// secrets vers la configuration est un switch qui ne la nommait pas. Deux
+// listes de fournisseurs, dont une seule était à jour, et la personne au milieu
+// sans aucun moyen de comprendre.
+//
+// Ce test est l'unique liste : il prend le catalogue, garde ceux qui se
+// configurent par une clé — ni adresse, ni binaire installé — en stocke une, et
+// vérifie que l'exécution la voit. Le prochain fournisseur oublié échouera ici
+// plutôt que chez quelqu'un.
+func TestEveryKeyProviderReachesTheConfig(t *testing.T) {
+	e := newTestEnv(t)
+	catalog := decodeCatalog(t, e.do("GET", "/api/providers", nil).Body.Bytes())
+
+	tried := 0
+	for _, entry := range catalog {
+		if entry.Endpoint || isCLIProvider(entry.ID) {
+			// Une adresse n'est pas une clé, et un CLI installé non plus.
+			continue
+		}
+		res := e.do("PUT", "/api/secrets", map[string]string{
+			"provider": entry.ID,
+			"secret":   "clef-de-test-" + entry.ID,
+		})
+		if res.Code != http.StatusOK {
+			t.Fatalf("stocker la clé de %s : %d %s", entry.ID, res.Code, res.Body)
+		}
+		tried++
+
+		cfg := e.daemon.providerConfig()
+		if got := effectiveCredential(cfg, entry.ID); got != "clef-de-test-"+entry.ID {
+			t.Errorf(
+				"la clé de %s est stockée mais n'atteint pas l'exécution (vue : %q).\n"+
+					"providerConfig ne la plie pas dans la configuration — le panneau dira « Connected » "+
+					"et le run dira qu'il n'y a pas de clé.",
+				entry.ID, got,
+			)
+		}
+	}
+	if tried < 4 {
+		t.Fatalf("le catalogue n'a offert que %d fournisseurs à clé : le test ne prouve plus rien", tried)
+	}
+}
