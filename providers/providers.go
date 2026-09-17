@@ -45,6 +45,17 @@ type Config struct {
 	// ImageProvider is the deployment default when a node names no provider.
 	ImageProvider string
 
+	// VideoProvider is the same thing for video, and it is a separate field
+	// rather than a reuse of ImageProvider because the two are separate
+	// decisions: the account whose image quota you are spending is not
+	// necessarily the one you want a video billed to, and video is billed by
+	// the second.
+	VideoProvider string
+	// VideoModel is the deployment default for video, and it names a Veo model
+	// — the two backends share no vocabulary of model names, so this one only
+	// travels to Google.
+	VideoModel string
+
 	// PinnedTextModel forces every text call onto one model, whatever a node
 	// asked for. It exists for runs the platform pays for: a free allowance
 	// where a node could name the most expensive model on the endpoint is not
@@ -124,6 +135,11 @@ func FromEnv() *Config {
 		BFLBaseURL:    getEnv("KLEIN_CLOUD_BASE_URL", bflDefaultBaseURL),
 		ImageProvider: getEnv("IMAGE_PROVIDER", ""),
 		VisionModel:   getEnv("GEMINI_VISION_MODEL", "gemini-3.6-flash"),
+		VideoProvider: getEnv("VIDEO_PROVIDER", ""),
+		// Empty rather than a name written here: each adapter knows its own
+		// default, and a second place naming one is the place that goes stale
+		// the week Veo ships a version.
+		VideoModel: getEnv("VEO_MODEL", ""),
 
 		AnthropicAPIKey:  os.Getenv("ANTHROPIC_API_KEY"),
 		AnthropicModel:   getEnv("ANTHROPIC_MODEL", "claude-opus-5"),

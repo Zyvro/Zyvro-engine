@@ -72,9 +72,15 @@ const (
 	// executes other nodes of the graph as tools. It is the widest of the five,
 	// because a Brain reaches nodes this one is not.
 	CapAgent = "agent"
+	// CapVideo is the host rendering a video on the node's behalf. It is not
+	// part of CapImage, and the separation is the point of this list: a video
+	// is billed by the second and takes a minute, where an image is billed once
+	// and takes a moment. "This pack may make you an image" and "this pack may
+	// spend a minute of video per call" are not the same sentence.
+	CapVideo = "video"
 )
 
-var knownCapabilities = []string{CapLLM, CapFiles, CapImage, CapVision, CapAgent}
+var knownCapabilities = []string{CapLLM, CapFiles, CapImage, CapVision, CapAgent, CapVideo}
 
 // A note on reserved node types, which used to live here as a list.
 //
@@ -94,7 +100,7 @@ var knownCapabilities = []string{CapLLM, CapFiles, CapImage, CapVision, CapAgent
 
 // portTypes are the values a node's inputs and outputs may name. They mirror
 // the engine's NodeOutput.Type, plus "any" for a node that does not care.
-var portTypes = []string{"text", "image", "json", "any"}
+var portTypes = []string{"text", "image", "video", "json", "any"}
 
 // categories are the palette sections a node may be filed under.
 var categories = []string{"Input", "AI", "Utility", "Output", "Agent"}

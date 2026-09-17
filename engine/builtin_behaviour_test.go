@@ -503,7 +503,10 @@ func builtinCases() []builtinCase {
 			graph: &Graph{Nodes: []GraphNode{node("A", "textInput", map[string]any{"value": "x"}), node("B", "preview", nil), node("C", "preview", nil)}, Edges: []GraphEdge{dataEdge("e1", "A", "B"), dataEdge("e2", "C", "B")}},
 		},
 		{
-			name:  "generateVideo_still_refuses",
+			// Il a refusé de tourner tant qu'aucun dos ne savait faire une
+			// vidéo. Maintenant qu'il y en a deux, ce qu'il dit sans
+			// description est ce que dit le nœud image : ce qui lui manque.
+			name:  "generateVideo_says_what_it_needs",
 			graph: &Graph{Nodes: []GraphNode{node("A", "generateVideo", nil), node("B", "preview", nil)}, Edges: []GraphEdge{dataEdge("e1", "A", "B")}},
 		},
 		{

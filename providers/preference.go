@@ -57,6 +57,8 @@ func ProvidersFor(role string) []string {
 		return ImageProviders
 	case "vision":
 		return VisionProviders
+	case "video":
+		return VideoProviders
 	case "completion":
 		return CompletionProviders
 	}

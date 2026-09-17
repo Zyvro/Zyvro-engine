@@ -137,7 +137,12 @@ var builtinKinds = []NodeKind{
 // nobody can place is better than one that can be placed and then fails, and
 // the case stays so that an old workflow still gets the real explanation rather
 // than "unknown node type".
-var disabledNodeTypes = []string{"generateVideo"}
+//
+// It is empty, and has been since generateVideo left it. The list stays because
+// the situation it describes will happen again — a node whose backend is gone,
+// or not there yet — and because the palette and the executor are checked
+// against each other by a test that needs somewhere to read the exceptions.
+var disabledNodeTypes = []string{}
 
 // BuiltinKinds returns the palette entries for the engine's own nodes. The
 // copies are deep, because a caller renders this and must not be able to reach

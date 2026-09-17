@@ -192,7 +192,7 @@ func TestUnknownPortTypeIsRejected(t *testing.T) {
 	loadFails(t, goodManifest, map[string]string{"a.lua": `
 		return {
 			type = "thing",
-			inputs = { "video" },
+			inputs = { "audio" },
 			outputs = { "text" },
 			run = function(ctx) return { text = "x" } end,
 		}

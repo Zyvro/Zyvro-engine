@@ -191,6 +191,21 @@ func num(v any, def float64) float64 {
 	return def
 }
 
+// truthy lit une case à cocher qui a pu traverser du JSON.
+//
+// Une valeur de configuration arrive telle que le graphe l'a écrite : un
+// booléen depuis l'éditeur, mais la chaîne "true" depuis un fichier écrit à la
+// main ou une API. Les deux veulent dire oui.
+func truthy(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		return strings.EqualFold(strings.TrimSpace(t), "true")
+	}
+	return false
+}
+
 // resolveInputs substitutes {{input:<key>}} placeholders in a string using
 // runtime inputs.
 func (r *Runtime) resolveInputs(s string) string {
@@ -235,10 +250,10 @@ func (r *Runtime) ExecuteNode(ctx context.Context, n *GraphNode) (*NodeOutput, e
 //     text as the JSON of its raw node value. A Lua version would need every
 //     upstream value rather than the first, un-narrowed, plus a JSON encoder —
 //     three additions to the host API for a node whose behaviour is a join.
-//   - generateVideo refuses to run. It is deliberately absent from the palette,
-//     and a Lua file for it would put it back: a node nobody can place is
-//     better than one that can be placed and then fails, but an old workflow
-//     that has one still deserves the real explanation.
+//   - generateVideo was here too, refusing to run, for as long as no backend
+//     could make a video. Two can now, so it left this switch for a Lua file
+//     like the others — and an old workflow that still carries one runs instead
+//     of being told the build cannot.
 //
 // Everything else is a Lua file in the bundled pack, and reaches this function
 // through its default case.
@@ -266,8 +281,6 @@ func (r *Runtime) executeWithInput(ctx context.Context, in *RunInput) (*NodeOutp
 			return nil, fmt.Errorf("%s node has no input", in.Node.Type)
 		}
 		return o, nil
-	case "generateVideo":
-		return nil, fmt.Errorf("video generation is disabled in this build")
 	default:
 		// One of the bundled pack's nodes, or one an installed pack
 		// contributed, and by this point the two run the same way. Only once
@@ -609,6 +622,116 @@ func (r *Runtime) storeImage(nodeID, prefix string, img *providers.ImageResult) 
 		}
 	}
 	return out
+}
+
+// runGenerateVideo : une description, et parfois une image, deviennent un plan.
+//
+// Ce nœud a refusé de tourner pendant un an — « video generation is disabled in
+// this build » — faute d'un dos qui sache en faire. Il y en a deux maintenant,
+// et le refus qui reste est celui du stockage, pour une raison qui n'est pas la
+// même que pour les images.
+//
+// Une image générée voyage dans le graphe en data URL ; c'est déjà généreux et
+// ça marche. Une vidéo de vingt secondes pèse des dizaines de méga-octets, et
+// la mettre en base64 dans une sortie de nœud la mettrait aussi dans le cache,
+// dans la réponse de l'API et dans le fichier du workflow. Elle est donc écrite
+// sur le disque et c'est son adresse qui circule — sans magasin, il n'y a nulle
+// part où l'écrire, et le dire vaut mieux que de rendre la fenêtre inutilisable.
+func (r *Runtime) runGenerateVideo(ctx context.Context, in *RunInput) (*NodeOutput, error) {
+	prompt := str(in.Config["prompt"])
+	if prompt == "" {
+		if t := firstUpstream(in.Upstream, "text"); t != nil {
+			prompt = r.resolveInputs(str(t.Value["text"]))
+		}
+	}
+	if prompt == "" {
+		return nil, fmt.Errorf("generate video needs a prompt")
+	}
+	if r.Storage == nil {
+		return nil, fmt.Errorf("video generation needs somewhere to store the file, and this run has no media store")
+	}
+
+	// Le modèle par défaut du déploiement est celui de Veo : le donner à Black
+	// Forest Labs serait lui tendre un nom que personne là-bas n'a entendu.
+	model := str(in.Config["model"])
+	if model == "" && r.Providers != nil && r.Providers.ResolvedVideoProvider(str(in.Config["provider"])) == "google" {
+		model = r.videoModel()
+	}
+
+	// Les images d'entrée deviennent les clés du plan : la première l'ouvre, la
+	// seconde le ferme. Elles ne traversent pas le script — le graphe les a déjà.
+	var frames []providers.ImageResult
+	for _, u := range in.Upstream {
+		if u == nil || u.Type != "image" {
+			continue
+		}
+		mime, data, err := parseDataURL(str(u.Value["dataUrl"]))
+		if err != nil || data == nil {
+			continue
+		}
+		frames = append(frames, providers.ImageResult{Data: data, MimeType: mime})
+	}
+
+	video, err := r.Providers.VideoGenerate(ctx, providers.VideoRequest{
+		Provider:    str(in.Config["provider"]),
+		Model:       model,
+		Prompt:      prompt,
+		AspectRatio: str(in.Config["aspectRatio"]),
+		Resolution:  str(in.Config["resolution"]),
+		Duration:    int(num(in.Config["duration"], 0)),
+		Draft:       truthy(in.Config["draft"]),
+		Keyframes:   frames,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("video generation failed: %w", err)
+	}
+	return r.storeVideo(in.Node.ID, video)
+}
+
+// storeVideo écrit le fichier et rend la sortie qui le désigne.
+//
+// Pas de data URL, même en dernier recours : voir runGenerateVideo. Une sortie
+// sans adresse serait une vidéo que personne ne peut ouvrir, donc l'échec
+// d'écriture est une erreur et pas un repli silencieux.
+func (r *Runtime) storeVideo(nodeID string, video *providers.VideoResult) (*NodeOutput, error) {
+	url, err := r.Storage.SaveMedia(r.ExecID, nodeID, "video."+extForVideoMime(video.MimeType), video.Data, video.MimeType)
+	if err != nil {
+		return nil, fmt.Errorf("the video could not be stored: %w", err)
+	}
+	if url == "" {
+		return nil, fmt.Errorf("the video was stored without an address, so nothing could open it")
+	}
+	out := &NodeOutput{Type: "video", Value: map[string]any{
+		"mimeType": video.MimeType,
+		"bytes":    len(video.Data),
+		"url":      url,
+	}}
+	if video.Seconds > 0 {
+		// La durée est l'unité de facturation des deux fournisseurs : une vidéo
+		// dont on ne sait pas la longueur est une facture qu'on ne sait pas lire.
+		out.Value["seconds"] = video.Seconds
+	}
+	return out, nil
+}
+
+func extForVideoMime(mime string) string {
+	switch mime {
+	case "video/webm":
+		return "webm"
+	case "video/quicktime":
+		return "mov"
+	default:
+		return "mp4"
+	}
+}
+
+func (r *Runtime) videoModel() string {
+	if r.Providers != nil && r.Providers.VideoModel != "" {
+		return r.Providers.VideoModel
+	}
+	// Vide plutôt qu'un nom écrit ici : l'adaptateur connaît le sien, et deux
+	// endroits qui nomment un modèle par défaut finissent par en nommer deux.
+	return ""
 }
 
 func (r *Runtime) runEditImage(ctx context.Context, in *RunInput) (*NodeOutput, error) {

@@ -61,6 +61,12 @@ func HostedCompletionProviders() []string { return hostedOnly(CompletionProvider
 // the server cannot reach and nothing says why.
 func HostedVisionProviders() []string { return hostedOnly(VisionProviders) }
 
+// HostedVideoProviders is the same subtraction for video. Both of its backends
+// are hosted, so it subtracts nothing today — and it exists anyway, because the
+// day a video model runs on somebody's own machine is the day a copy of this
+// list written by hand would send a hosted run there.
+func HostedVideoProviders() []string { return hostedOnly(VideoProviders) }
+
 // hostedOnly drops the providers that only exist on the machine the person is
 // sitting at.
 func hostedOnly(all []string) []string {

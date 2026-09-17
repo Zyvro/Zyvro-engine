@@ -154,7 +154,10 @@ func TestEveryNodeTheEngineShipsActuallyDispatches(t *testing.T) {
 // not one of them. It is half of ReservedNodeTypes, and a name missing from it
 // is a name a pack may take.
 func TestBuiltinNodeTypesIsTheGoHalf(t *testing.T) {
-	want := []string{"fileInput", "fileOutput", "generateVideo", "imageInput", "mergeText", "output", "preview", "textInput"}
+	// generateVideo n'y est plus : il a quitté le Go le jour où deux dos ont su
+	// faire une vidéo, et c'est un fichier Lua du pack livré comme les autres.
+	// Son nom reste réservé pour autant — ReservedNodeTypes lit aussi le pack.
+	want := []string{"fileInput", "fileOutput", "imageInput", "mergeText", "output", "preview", "textInput"}
 	missing, extra := diff(BuiltinNodeTypes(), want)
 	if len(missing) > 0 || len(extra) > 0 {
 		t.Errorf("BuiltinNodeTypes is %v; missing %v, unexpected %v.\n"+

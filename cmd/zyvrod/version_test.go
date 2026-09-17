@@ -147,10 +147,31 @@ func TestNodeTypesFlagListsWhatTheEngineOffers(t *testing.T) {
 	}
 
 	// A disabled node is a name a pack may not take, and still not a node
-	// anyone can place: it must not reach a palette.
-	for _, t2 := range got {
-		if t2 == "generateVideo" {
-			t.Error("a disabled node type was offered as runnable")
+	// anyone can place: it must not reach a palette. generateVideo used to be
+	// the example here and is now the counter-example — it runs, so it belongs
+	// in the palette — which leaves the rule stated against the list itself.
+	disabled := map[string]bool{}
+	for _, name := range engine.BuiltinNodeTypes() {
+		disabled[name] = true
+	}
+	for _, name := range engine.RunnableBuiltinNodeTypes() {
+		delete(disabled, name)
+	}
+	for _, name := range got {
+		if disabled[name] {
+			t.Errorf("%s is disabled and was offered as runnable", name)
 		}
 	}
+	if !containsString(got, "generateVideo") {
+		t.Error("generateVideo runs now: it belongs in the palette")
+	}
+}
+
+func containsString(list []string, v string) bool {
+	for _, item := range list {
+		if item == v {
+			return true
+		}
+	}
+	return false
 }

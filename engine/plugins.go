@@ -89,7 +89,7 @@ func (r *Runtime) dispatchesToPlugin(nodeType string) bool {
 // below turns into a false alarm — which a test in this package catches.
 var goImplementedNodeTypes = []string{
 	"textInput", "imageInput", "fileInput", "fileOutput",
-	"mergeText", "preview", "output", "generateVideo",
+	"mergeText", "preview", "output",
 }
 
 // runPluginNode executes one node contributed by a pack, built-in or installed.
@@ -148,6 +148,9 @@ func (r *Runtime) pluginHostInput(def *plugins.NodeDef, in *RunInput) plugins.Ho
 			Flip:             r.nodeFunc(in, withoutContext(r.runFlipImage)),
 			Compose:          r.nodeFunc(in, withoutContext(r.runVoxelPreview)),
 		}
+	}
+	if def.Has(plugins.CapVideo) {
+		host.Video = plugins.VideoFuncs{Generate: r.nodeFunc(in, r.runGenerateVideo)}
 	}
 	if def.Has(plugins.CapVision) {
 		host.Vision = plugins.VisionFuncs{Describe: r.nodeFunc(in, r.runVision)}

@@ -941,18 +941,18 @@ func (d *daemon) localCatalog() []providerInfo {
 		{
 			ID:         "google",
 			Label:      "Google AI Studio",
-			Purpose:    "Image generation, image editing and vision (Gemini).",
+			Purpose:    "Image generation, image editing, vision (Gemini) and video (Veo).",
 			KeyHint:    "AIza…",
 			ConsoleURL: "https://aistudio.google.com/apikey",
-			SetupHint:  "Create an API key in Google AI Studio. Every image and vision node needs it.",
+			SetupHint:  "Create an API key in Google AI Studio. Every image, vision and video node needs it. Video is billed by the second.",
 		},
 		{
 			ID:         "bfl",
 			Label:      "Black Forest Labs (FLUX)",
-			Purpose:    "Image generation on FLUX models.",
+			Purpose:    "Image and video generation on FLUX models.",
 			KeyHint:    "Black Forest Labs API key",
 			ConsoleURL: "https://dashboard.bfl.ai/keys",
-			SetupHint:  "Create a key in the Black Forest Labs dashboard. It pays per image, so a small top-up goes a long way.",
+			SetupHint:  "Create a key in the Black Forest Labs dashboard. Images are billed once each; video is billed by the second, and the draft pass is a third of the price.",
 		},
 		{
 			ID:         "anthropic",
@@ -1082,6 +1082,7 @@ func localRolesOf(id string) []string {
 		{"text", providers.TextProviders},
 		{"image", providers.ImageProviders},
 		{"vision", providers.VisionProviders},
+		{"video", providers.VideoProviders},
 		{"completion", providers.CompletionProviders},
 	} {
 		for _, candidate := range role.list {

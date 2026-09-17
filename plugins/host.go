@@ -85,6 +85,13 @@ type ImageFuncs struct {
 	Compose NodeFunc
 }
 
+// VideoFuncs is the video capability: the host rendering a clip on the node's
+// behalf. One function, because there is one thing to do — a video that already
+// exists is not something this engine edits.
+type VideoFuncs struct {
+	Generate NodeFunc
+}
+
 // VisionFuncs is the vision capability: images to a model, words back.
 type VisionFuncs struct {
 	Describe NodeFunc
@@ -135,6 +142,7 @@ type HostInput struct {
 	LLM      LLMFunc
 	Complete NodeFunc
 	Image    ImageFuncs
+	Video    VideoFuncs
 	Vision   VisionFuncs
 	Agent    AgentFuncs
 	Files    FileAccess
@@ -254,6 +262,9 @@ func (h *host) contextTable(L *lua.LState) *lua.LTable {
 		h.bindNode(L, ctx, "rotateImage", h.in.Image.Rotate, local)
 		h.bindNode(L, ctx, "flipImage", h.in.Image.Flip, local)
 		h.bindNode(L, ctx, "composeImages", h.in.Image.Compose, local)
+	}
+	if h.def.Has(CapVideo) {
+		h.bindNode(L, ctx, "generateVideo", h.in.Video.Generate, spends)
 	}
 	if h.def.Has(CapVision) {
 		h.bindNode(L, ctx, "vision", h.in.Vision.Describe, spends)
