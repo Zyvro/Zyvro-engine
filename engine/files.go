@@ -124,7 +124,11 @@ func (r *Runtime) runFileInput(in *RunInput) (*NodeOutput, error) {
 	// The path goes through the input resolver first: a workflow that is run
 	// over a list of files drives this node with {{input:...}} rather than
 	// being edited between runs.
-	path := strings.TrimSpace(r.resolveInputs(str(in.Config["path"])))
+	resolved, err := r.resolveInputs(str(in.Config["path"]))
+	if err != nil {
+		return nil, err
+	}
+	path := strings.TrimSpace(resolved)
 	if path == "" {
 		return nil, fmt.Errorf("file input needs a path relative to the project folder")
 	}
@@ -247,7 +251,11 @@ func (r *Runtime) runFileOutput(in *RunInput) (*NodeOutput, error) {
 	if src == nil {
 		return nil, fmt.Errorf("file output node has nothing to write: connect the node whose result should be saved")
 	}
-	path := strings.TrimSpace(r.resolveInputs(str(in.Config["path"])))
+	resolvedPath, err := r.resolveInputs(str(in.Config["path"]))
+	if err != nil {
+		return nil, err
+	}
+	path := strings.TrimSpace(resolvedPath)
 	if path == "" {
 		return nil, fmt.Errorf("file output needs a path relative to the project folder")
 	}

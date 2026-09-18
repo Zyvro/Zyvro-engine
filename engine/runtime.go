@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"image"
 	"io"
 	"net/http"
@@ -206,16 +207,42 @@ func truthy(v any) bool {
 	return false
 }
 
+// inputPlaceholder matches a placeholder that is still there after
+// substitution — which is to say one naming an input the run was not given.
+var inputPlaceholder = regexp.MustCompile(`\{\{input:([^}]*)\}\}`)
+
 // resolveInputs substitutes {{input:<key>}} placeholders in a string using
-// runtime inputs.
-func (r *Runtime) resolveInputs(s string) string {
+// runtime inputs, and refuses to hand back a string that still has one.
+//
+// It used to leave the unknown ones alone, and that silence is what this
+// signature exists to end. A workflow whose output path was
+// `abyssal-hd/{{input:gfx}}`, run without a `gfx`, wrote a three-megabyte image
+// into a file literally named `{{input:gfx}}`. Nothing failed. The run was
+// green, the preview showed the picture, and the file was unusable and
+// invisible — one per run, always the same name, each one overwriting the last.
+//
+// The same silence was costing more quietly elsewhere: an unresolved
+// placeholder in a prompt is sent to the model as those very characters, and
+// the model answers something plausible about nothing.
+//
+// So: a placeholder that names an input the run does not have is a run started
+// wrong, and it says so — with the name, which is the only part worth reading.
+func (r *Runtime) resolveInputs(s string) (string, error) {
+	if !strings.Contains(s, "{{input:") {
+		return s, nil
+	}
 	for key, v := range r.Inputs {
 		placeholder := "{{input:" + key + "}}"
 		if strings.Contains(s, placeholder) {
 			s = strings.ReplaceAll(s, placeholder, fmt.Sprint(v))
 		}
 	}
-	return s
+	if m := inputPlaceholder.FindStringSubmatch(s); m != nil {
+		return "", fmt.Errorf(
+			"this workflow needs an input named %q: run it with that input, or replace {{input:%s}} with a fixed value",
+			m[1], m[1])
+	}
+	return s, nil
 }
 
 // ExecuteNode runs a single node and returns its output.
@@ -364,7 +391,10 @@ func (r *Runtime) runTextInput(in *RunInput) (*NodeOutput, error) {
 	if v, ok := r.runtimeInput(in.Node); ok {
 		return textOutput(v), nil
 	}
-	value := r.resolveInputs(str(in.Config["value"]))
+	value, err := r.resolveInputs(str(in.Config["value"]))
+	if err != nil {
+		return nil, err
+	}
 	return textOutput(value), nil
 }
 
@@ -512,7 +542,11 @@ func (r *Runtime) runLLM(ctx context.Context, in *RunInput) (*NodeOutput, error)
 	prompt := str(in.Config["prompt"])
 	if prompt == "" {
 		if t := firstUpstream(in.Upstream, "text"); t != nil {
-			prompt = r.resolveInputs(str(t.Value["text"]))
+			resolved, err := r.resolveInputs(str(t.Value["text"]))
+			if err != nil {
+				return nil, err
+			}
+			prompt = resolved
 		}
 	}
 	if prompt == "" {
@@ -564,7 +598,11 @@ func (r *Runtime) runGenerateImage(ctx context.Context, in *RunInput) (*NodeOutp
 	prompt := str(in.Config["prompt"])
 	if prompt == "" {
 		if t := firstUpstream(in.Upstream, "text"); t != nil {
-			prompt = r.resolveInputs(str(t.Value["text"]))
+			resolved, err := r.resolveInputs(str(t.Value["text"]))
+			if err != nil {
+				return nil, err
+			}
+			prompt = resolved
 		}
 	}
 	if prompt == "" {
@@ -641,7 +679,11 @@ func (r *Runtime) runGenerateVideo(ctx context.Context, in *RunInput) (*NodeOutp
 	prompt := str(in.Config["prompt"])
 	if prompt == "" {
 		if t := firstUpstream(in.Upstream, "text"); t != nil {
-			prompt = r.resolveInputs(str(t.Value["text"]))
+			resolved, err := r.resolveInputs(str(t.Value["text"]))
+			if err != nil {
+				return nil, err
+			}
+			prompt = resolved
 		}
 	}
 	if prompt == "" {

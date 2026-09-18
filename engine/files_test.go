@@ -482,3 +482,58 @@ func TestFileNodesAreNeverReplayedFromCache(t *testing.T) {
 		t.Fatal("the llm node was not replayed; the cache bypass is too broad")
 	}
 }
+
+// Un motif qui ne correspond à aucune entrée du run n'est pas un nom de
+// fichier.
+//
+// Le défaut, signalé par Jeremy sur un vrai workflow : le chemin de sortie
+// était `abyssal-hd/{{input:gfx}}`, le run partait sans `gfx`, et trois
+// mégaoctets d'image partaient dans un fichier littéralement nommé
+// `{{input:gfx}}`. Rien n'échouait — le run était vert, l'aperçu montrait
+// l'image — et chaque exécution réécrivait le même fichier inutilisable.
+func TestAnUnresolvedPlaceholderIsNotAFileName(t *testing.T) {
+	files := newFakeFiles()
+	rt := &Runtime{Files: files}
+
+	_, err := runFile(t, rt, "fileOutput", map[string]any{"path": "abyssal-hd/{{input:gfx}}"}, textOutput("des octets"))
+	if err == nil {
+		t.Fatal("écrire dans un fichier dont le nom est un motif doit échouer")
+	}
+	// Le nom manquant est la seule partie du message qui serve à quelque chose.
+	if !strings.Contains(err.Error(), `"gfx"`) {
+		t.Fatalf("le message ne nomme pas l'entrée manquante : %v", err)
+	}
+	for nom := range files.wrote {
+		t.Fatalf("un fichier a été écrit quand même : %q", nom)
+	}
+}
+
+// La même règle à l'entrée. Elle échouait déjà, mais par accident — « fichier
+// introuvable » — et un message qui parle du disque là où le problème est le
+// run envoie chercher au mauvais endroit.
+func TestAnUnresolvedPlaceholderInASourcePathSaysWhichInputIsMissing(t *testing.T) {
+	rt := &Runtime{Files: newFakeFiles()}
+
+	_, err := runFile(t, rt, "fileInput", map[string]any{"path": "abyssal/{{input:gfx}}.png"})
+	if err == nil {
+		t.Fatal("lire un fichier dont le nom est un motif doit échouer")
+	}
+	if !strings.Contains(err.Error(), `"gfx"`) {
+		t.Fatalf("le message ne nomme pas l'entrée manquante : %v", err)
+	}
+}
+
+// Et un motif résolu reste résolu : la sévérité ne doit pas casser ce qui
+// marchait.
+func TestAResolvedPlaceholderStillWritesWhereItSays(t *testing.T) {
+	files := newFakeFiles()
+	rt := &Runtime{Files: files, Inputs: map[string]any{"gfx": "53013.png"}}
+
+	_, err := runFile(t, rt, "fileOutput", map[string]any{"path": "abyssal-hd/{{input:gfx}}"}, textOutput("des octets"))
+	if err != nil {
+		t.Fatalf("fileOutput: %v", err)
+	}
+	if string(files.wrote["abyssal-hd/53013.png"]) != "des octets" {
+		t.Fatalf("écrit : %v", files.wrote)
+	}
+}

@@ -38,7 +38,11 @@ func (r *Runtime) runBrain(ctx context.Context, in *RunInput) (*NodeOutput, erro
 	goal := str(in.Config["goal"])
 	if goal == "" {
 		if t := firstUpstream(in.Upstream, "text"); t != nil {
-			goal = r.resolveInputs(str(t.Value["text"]))
+			resolved, err := r.resolveInputs(str(t.Value["text"]))
+			if err != nil {
+				return nil, err
+			}
+			goal = resolved
 		}
 	}
 	if goal == "" {

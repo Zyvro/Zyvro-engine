@@ -359,10 +359,13 @@ func TestFilesCapabilityDecidesWhetherFileAccessIsHandedOver(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s is not registered", tc.nodeType)
 		}
-		host := rt.pluginHostInput(def, &RunInput{
+		host, err := rt.pluginHostInput(def, &RunInput{
 			Node:   &GraphNode{ID: "n", Type: tc.nodeType},
 			Config: map[string]any{},
 		})
+		if err != nil {
+			t.Fatalf("pluginHostInput: %v", err)
+		}
 		if got := host.Files != nil; got != tc.want {
 			t.Errorf("%s: got a FileAccess = %v, want %v", tc.nodeType, got, tc.want)
 		}
@@ -506,7 +509,10 @@ func TestTheEngineDoesNotHandOverWhatAPackDidNotDeclare(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s is not registered", tc.nodeType)
 		}
-		host := rt.pluginHostInput(def, &RunInput{Node: &GraphNode{ID: "n", Type: tc.nodeType}, Config: map[string]any{}})
+		host, err := rt.pluginHostInput(def, &RunInput{Node: &GraphNode{ID: "n", Type: tc.nodeType}, Config: map[string]any{}})
+		if err != nil {
+			t.Fatalf("pluginHostInput: %v", err)
+		}
 		// Kept as a slice of typed pairs rather than a map[string]any: a nil
 		// func put into an interface is not a nil interface, so the obvious
 		// version of this loop would have reported every function as handed

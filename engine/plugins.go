@@ -104,7 +104,11 @@ func (r *Runtime) runPluginNode(ctx context.Context, in *RunInput) (*NodeOutput,
 		return nil, unknownNodeType(nodeType)
 	}
 
-	out, log, err := reg.RunWithLog(ctx, nodeType, r.pluginHostInput(def, in))
+	host, err := r.pluginHostInput(def, in)
+	if err != nil {
+		return nil, err
+	}
+	out, log, err := reg.RunWithLog(ctx, nodeType, host)
 	// Recorded before the error is checked: a node that failed after printing
 	// three lines is a node whose author needs those three lines, and they are
 	// gone the moment this function returns without keeping them.
@@ -129,10 +133,14 @@ func (r *Runtime) runPluginNode(ctx context.Context, in *RunInput) (*NodeOutput,
 // the boundary: a pack that did not declare a capability must not be handed a
 // live function at all, so that a future bug in the sandbox's own gate has
 // nothing to leak.
-func (r *Runtime) pluginHostInput(def *plugins.NodeDef, in *RunInput) plugins.HostInput {
+func (r *Runtime) pluginHostInput(def *plugins.NodeDef, in *RunInput) (plugins.HostInput, error) {
+	config, err := r.resolvePluginConfig(in.Config)
+	if err != nil {
+		return plugins.HostInput{}, err
+	}
 	host := plugins.HostInput{
 		Input:  firstNonNil(in.Upstream),
-		Config: r.resolvePluginConfig(in.Config),
+		Config: config,
 		Limits: r.PluginLimits,
 	}
 	if def.Has(plugins.CapLLM) {
@@ -164,7 +172,7 @@ func (r *Runtime) pluginHostInput(def *plugins.NodeDef, in *RunInput) plugins.Ho
 	if def.Has(plugins.CapFiles) && r.Files != nil {
 		host.Files = r.Files
 	}
-	return host
+	return host, nil
 }
 
 // nodeRun is the shape of every one of the engine's own node implementations.
@@ -225,12 +233,16 @@ func firstNonNil(ups []*NodeOutput) *plugins.Output {
 //
 // The result is a new map. The one it reads is the node's own Data, which the
 // graph keeps for the rest of the run and the fingerprint has already hashed.
-func (r *Runtime) resolvePluginConfig(cfg map[string]any) map[string]any {
+func (r *Runtime) resolvePluginConfig(cfg map[string]any) (map[string]any, error) {
 	out := make(map[string]any, len(cfg))
 	for k, v := range cfg {
-		out[k] = r.resolvePluginValue(v, 0)
+		resolved, err := r.resolvePluginValue(v, 0)
+		if err != nil {
+			return nil, err
+		}
+		out[k] = resolved
 	}
-	return out
+	return out, nil
 }
 
 // maxConfigDepth bounds the walk. A config comes from JSON the user's own
@@ -238,27 +250,39 @@ func (r *Runtime) resolvePluginConfig(cfg map[string]any) map[string]any {
 // shape is cheap to write and expensive to recurse into.
 const maxConfigDepth = 32
 
-func (r *Runtime) resolvePluginValue(v any, depth int) any {
+func (r *Runtime) resolvePluginValue(v any, depth int) (any, error) {
 	if depth > maxConfigDepth {
-		return nil
+		return nil, nil
 	}
 	switch t := v.(type) {
 	case string:
-		return r.resolveInputs(t)
+		resolved, err := r.resolveInputs(t)
+		if err != nil {
+			return nil, err
+		}
+		return resolved, nil
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, item := range t {
-			out[k] = r.resolvePluginValue(item, depth+1)
+			resolved, err := r.resolvePluginValue(item, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			out[k] = resolved
 		}
-		return out
+		return out, nil
 	case []any:
 		out := make([]any, len(t))
 		for i, item := range t {
-			out[i] = r.resolvePluginValue(item, depth+1)
+			resolved, err := r.resolvePluginValue(item, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = resolved
 		}
-		return out
+		return out, nil
 	default:
-		return v
+		return v, nil
 	}
 }
 

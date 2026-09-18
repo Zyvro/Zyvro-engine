@@ -1,6 +1,10 @@
 package engine
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+)
 
 func inputNode(id, typ, key, label string, cfg map[string]any) GraphNode {
 	if cfg == nil {
@@ -85,5 +89,40 @@ func TestRuntimeInputTypesSaysTheTruth(t *testing.T) {
 		if typ == "fileInput" {
 			t.Error("fileInput ne lit pas les valeurs d'exécution par son nom")
 		}
+	}
+}
+
+// Un motif non résolu dans un texte n'est pas un texte.
+//
+// La moitié silencieuse du même défaut que celui des chemins de fichier : un
+// prompt qui garde ses accolades part au modèle avec elles, et le modèle répond
+// quelque chose de plausible à propos de rien. Le run est vert, la réponse a
+// l'air d'une réponse.
+func TestAnUnresolvedPlaceholderInATextInputFails(t *testing.T) {
+	rt := &Runtime{}
+	_, err := rt.executeWithInput(context.Background(), &RunInput{
+		Node:   &GraphNode{ID: "t", Type: "textInput"},
+		Config: map[string]any{"value": "redessine {{input:sujet}}"},
+	})
+	if err == nil {
+		t.Fatal("un texte qui garde son motif doit échouer")
+	}
+	if !strings.Contains(err.Error(), `"sujet"`) {
+		t.Fatalf("le message ne nomme pas l'entrée manquante : %v", err)
+	}
+}
+
+// Et le texte d'à côté passe : la sévérité ne vise que les motifs.
+func TestATextWithoutAPlaceholderIsUntouched(t *testing.T) {
+	rt := &Runtime{}
+	out, err := rt.executeWithInput(context.Background(), &RunInput{
+		Node:   &GraphNode{ID: "t", Type: "textInput"},
+		Config: map[string]any{"value": "deux accolades { et } ne sont pas un motif"},
+	})
+	if err != nil {
+		t.Fatalf("textInput: %v", err)
+	}
+	if out.Value["text"] != "deux accolades { et } ne sont pas un motif" {
+		t.Fatalf("texte = %v", out.Value["text"])
 	}
 }
