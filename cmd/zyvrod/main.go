@@ -210,6 +210,8 @@ func (d *daemon) providerConfig() *providers.Config {
 				cfg.ClaudeCLIPath = value
 			case "codex-cli":
 				cfg.CodexCLIPath = value
+			case "qwen-cli":
+				cfg.QwenCLIPath = value
 			}
 		}
 	}
@@ -1002,6 +1004,13 @@ func (d *daemon) localCatalog() []providerInfo {
 			SetupHint:  "Install the Codex CLI so `codex` is on your PATH. Your subscription authenticates it; no key is stored here.",
 		},
 		{
+			ID:         "qwen-cli",
+			Label:      "Qwen Code (local CLI)",
+			Purpose:    "Text generation and the Brain agent through the qwen binary — the one harness that can be pointed at the models you already run here.",
+			ConsoleURL: "https://github.com/QwenLM/qwen-code",
+			SetupHint:  "Install Qwen Code so `qwen` is on your PATH. It runs on its own login by default, or against your Ollama or LM Studio through QWEN_CLI_ENDPOINT.",
+		},
+		{
 			ID:         providers.OllamaLocalProvider,
 			Label:      "Ollama (this machine)",
 			Purpose:    "Text generation, vision and code completion, on the models you have pulled locally.",
@@ -1128,7 +1137,7 @@ func effectiveCredential(cfg *providers.Config, id string) string {
 		return cfg.OpenAIAPIKey
 	case "ollama":
 		return cfg.OllamaAPIKey
-	case "claude-cli", "codex-cli":
+	case "claude-cli", "codex-cli", "qwen-cli":
 		// TextCredential resolves the CLI to its binary path, and returns ""
 		// when it is not installed, which is exactly "not configured" here.
 		return cfg.TextCredential(id)
@@ -1466,6 +1475,7 @@ func (d *daemon) localStatus(w http.ResponseWriter, r *http.Request) {
 		"cli": map[string]bool{
 			"claude": cfg.TextCredential("claude-cli") != "",
 			"codex":  cfg.TextCredential("codex-cli") != "",
+			"qwen":   cfg.TextCredential("qwen-cli") != "",
 		},
 		// The node types that only work here. The builder is shared with the
 		// hosted app, so it asks the backend it is talking to what it can run

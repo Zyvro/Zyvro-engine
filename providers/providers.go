@@ -101,18 +101,29 @@ type Config struct {
 	// user's machine (the desktop app), never on the hosted server.
 	ClaudeCLIPath string
 	CodexCLIPath  string
+	QwenCLIPath   string
 	// ClaudeCLIModel and CodexCLIModel are empty by default, which lets the CLI
 	// keep whatever model the subscription already chose for it.
 	ClaudeCLIModel string
 	CodexCLIModel  string
+	QwenCLIModel   string
+	// QwenCLIEndpoint names which provider Qwen Code runs against — one of the
+	// OpenAI-compatible endpoints this config already holds. Empty leaves it on
+	// its own login, which is what installing and signing in means.
+	//
+	// It exists for Qwen Code alone because Qwen Code alone can be aimed: the
+	// other two CLIs talk to the back of their own subscription and nothing
+	// else. That is the whole reason this provider is worth having next to
+	// them — it turns the provider list into a list of agent backends.
+	QwenCLIEndpoint string
 	// LocalCLITimeout caps one CLI call. Zero means 10 minutes.
 	LocalCLITimeout time.Duration
 	// LocalCLIWorkdir is the directory the CLI runs in. Empty means a temp dir.
 	LocalCLIWorkdir string
 
 	// TextProvider is the platform default for text nodes and the Brain when a
-	// node does not name one: "ollama", "anthropic", "openai", "claude-cli" or
-	// "codex-cli".
+	// node does not name one: "ollama", "anthropic", "openai", "claude-cli",
+	// "codex-cli" or "qwen-cli".
 	TextProvider string
 }
 
@@ -150,10 +161,13 @@ func FromEnv() *Config {
 
 		ClaudeCLIPath: getEnv("CLAUDE_CLI_PATH", "claude"),
 		CodexCLIPath:  getEnv("CODEX_CLI_PATH", "codex"),
+		QwenCLIPath:   getEnv("QWEN_CLI_PATH", "qwen"),
 		// Deliberately unset: an empty model means "let the CLI choose", which is
 		// the only correct answer for a subscription the user configured itself.
 		ClaudeCLIModel:  os.Getenv("CLAUDE_CLI_MODEL"),
 		CodexCLIModel:   os.Getenv("CODEX_CLI_MODEL"),
+		QwenCLIModel:    os.Getenv("QWEN_CLI_MODEL"),
+		QwenCLIEndpoint: os.Getenv("QWEN_CLI_ENDPOINT"),
 		LocalCLIWorkdir: os.Getenv("LOCAL_CLI_WORKDIR"),
 
 		TextProvider: getEnv("TEXT_PROVIDER", "ollama"),

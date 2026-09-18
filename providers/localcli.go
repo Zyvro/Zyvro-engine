@@ -26,6 +26,7 @@ import (
 const (
 	claudeCLIProvider = "claude-cli"
 	codexCLIProvider  = "codex-cli"
+	qwenCLIProvider   = "qwen-cli"
 
 	// defaultLocalCLITimeout bounds one call. These CLIs are agents rather than
 	// a single completion, so a long run is normal and the cap is generous; it
@@ -47,6 +48,8 @@ func localCLIKind(provider string) string {
 		return claudeCLIProvider
 	case codexCLIProvider:
 		return codexCLIProvider
+	case qwenCLIProvider:
+		return qwenCLIProvider
 	}
 	return ""
 }
@@ -60,6 +63,13 @@ func (c *Config) localCLIBinary(kind string) (bin, install string) {
 			bin = "codex"
 		}
 		return bin, "npm install -g @openai/codex"
+	}
+	if kind == qwenCLIProvider {
+		bin = strings.TrimSpace(c.QwenCLIPath)
+		if bin == "" {
+			bin = "qwen"
+		}
+		return bin, "npm install -g @qwen-code/qwen-code"
 	}
 	bin = strings.TrimSpace(c.ClaudeCLIPath)
 	if bin == "" {
@@ -88,6 +98,9 @@ func (c *Config) LocalCLIAvailable(provider string) bool {
 func (c *Config) localCLIModel(kind string) string {
 	if kind == codexCLIProvider {
 		return strings.TrimSpace(c.CodexCLIModel)
+	}
+	if kind == qwenCLIProvider {
+		return strings.TrimSpace(c.QwenCLIModel)
 	}
 	return strings.TrimSpace(c.ClaudeCLIModel)
 }
@@ -142,8 +155,11 @@ func (c *Config) localCLIComplete(ctx context.Context, req LLMRequest, kind stri
 		model = c.localCLIModel(kind)
 	}
 
-	if kind == codexCLIProvider {
+	switch kind {
+	case codexCLIProvider:
 		return c.codexCLIComplete(ctx, system, prompt, model)
+	case qwenCLIProvider:
+		return c.qwenCLIComplete(ctx, system, prompt, model)
 	}
 	return c.claudeCLIComplete(ctx, system, prompt, model)
 }
@@ -160,6 +176,61 @@ type claudeCLIEnvelope struct {
 	Result  string `json:"result"`
 }
 
+// resultEnvelope digs the run's verdict out of whatever the CLI printed.
+//
+// Three shapes, one answer, because two harnesses print the same envelope in
+// two wrappings and a second parser would be a second thing to get wrong:
+//
+//   - one object          `claude -p --output-format json`
+//   - an array of events  `qwen -o json`
+//   - one event per line  either CLI in stream-json
+//
+// Only the `result` event decides. The assistant events carry the same text,
+// but a run that narrates three turns has three of them, and the last word of
+// the run is the one the node asked for.
+func resultEnvelope(stdout string) (claudeCLIEnvelope, bool) {
+	trimmed := strings.TrimSpace(stdout)
+	if trimmed == "" {
+		return claudeCLIEnvelope{}, false
+	}
+
+	// An array of events: the last verdict wins, for the same reason the last
+	// agent message does on the codex path — a run can report more than once.
+	if strings.HasPrefix(trimmed, "[") {
+		var events []claudeCLIEnvelope
+		if json.Unmarshal([]byte(trimmed), &events) == nil {
+			for i := len(events) - 1; i >= 0; i-- {
+				if events[i].Type == "result" {
+					return events[i], true
+				}
+			}
+		}
+		return claudeCLIEnvelope{}, false
+	}
+
+	var env claudeCLIEnvelope
+	if json.Unmarshal([]byte(trimmed), &env) == nil {
+		return env, true
+	}
+
+	// One event per line. Lines that are not JSON are not an error here: the
+	// CLIs mix warnings into the stream and always have.
+	var last claudeCLIEnvelope
+	found := false
+	for _, line := range strings.Split(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var ev claudeCLIEnvelope
+		if json.Unmarshal([]byte(line), &ev) != nil || ev.Type != "result" {
+			continue
+		}
+		last, found = ev, true
+	}
+	return last, found
+}
+
 func (c *Config) claudeCLIComplete(ctx context.Context, system, prompt, model string) (*LLMResponse, error) {
 	args := []string{"-p", "--output-format", "json"}
 	if model != "" {
@@ -174,8 +245,8 @@ func (c *Config) claudeCLIComplete(ctx context.Context, system, prompt, model st
 		return nil, err
 	}
 
-	var env claudeCLIEnvelope
-	if jsonErr := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &env); jsonErr != nil {
+	env, parsed := resultEnvelope(stdout)
+	if !parsed {
 		// The envelope is not a stable contract. A newer CLI that prints plain
 		// text still produced a usable answer, so it is handed back rather than
 		// thrown away.
@@ -325,6 +396,100 @@ func (c *Config) codexCLIComplete(ctx context.Context, system, prompt, model str
 	// Nothing recognizable in the stream: whatever the CLI printed in plain text
 	// is the best answer available.
 	return &LLMResponse{Content: strings.TrimSpace(strings.Join(plain, "\n"))}, nil
+}
+
+// ---------- qwen (Qwen Code) ----------
+
+// Qwen Code est le troisième harnais, et il n'est pas un troisième du même
+// genre : c'est le seul qu'on peut VISER.
+//
+// claude et codex parlent au dos de leur propre abonnement et n'en changent
+// pas. Qwen Code, lui, prend un `--auth-type` — openai, openai-responses,
+// anthropic, gemini, vertex-ai, ou son propre compte — et une adresse. Les
+// fournisseurs que ce dépôt connaît déjà (Ollama sur cette machine, LM Studio,
+// un point d'accès quelconque) deviennent donc des dos d'agent sans qu'on ait
+// à écrire la moindre traduction de protocole. C'est la différence entre
+// « trois harnais » et « trois harnais × tous nos fournisseurs ».
+//
+// Vérifié sur cette machine plutôt que supposé : avec `--auth-type anthropic`
+// il poste sur `/v1/messages`, avec `--auth-type openai` sur
+// `/v1/chat/completions`. Une sonde a lu les deux.
+//
+// Et son enveloppe de sortie est celle de Claude Code, au mot près — `{"type":
+// "result","subtype":"success","is_error":…,"result":…}`. D'où l'absence d'un
+// troisième analyseur ici : `resultEnvelope` sert les deux.
+func (c *Config) qwenCLIComplete(ctx context.Context, system, prompt, model string) (*LLMResponse, error) {
+	// --bare coupe la découverte automatique au démarrage. Ce n'est pas une
+	// optimisation de confort : mesuré sur la même question, 190 s avec et 10 s
+	// sans, parce que l'extracteur de mémoire lançait deux requêtes de 26 000
+	// jetons avant de répondre quoi que ce soit. Un nœud de workflow ne paie
+	// pas ça.
+	//
+	// --approval-mode plan parce qu'un nœud de texte répond, il ne modifie
+	// rien : « analyze only, do not modify files or execute commands ». C'est
+	// la posture que `claude -p` a déjà par défaut, dite explicitement ici
+	// parce que le défaut de Qwen Code, lui, demanderait une approbation que
+	// personne ne peut donner à un processus sans terminal.
+	args := []string{"--bare", "--approval-mode", "plan", "-o", "json"}
+	if model != "" {
+		args = append(args, "-m", model)
+	}
+	if system != "" {
+		args = append(args, "--append-system-prompt", system)
+	}
+	args = append(args, c.qwenCLIAim()...)
+
+	stdout, err := c.runLocalCLI(ctx, qwenCLIProvider, args, prompt)
+	if err != nil {
+		return nil, err
+	}
+
+	env, parsed := resultEnvelope(stdout)
+	if !parsed {
+		return &LLMResponse{Content: strings.TrimSpace(stdout)}, nil
+	}
+	if env.IsError {
+		return nil, &ProviderError{
+			Code:    "cli_error",
+			Message: fmt.Sprintf("%s: %s", qwenCLIProvider, truncate(strings.TrimSpace(env.Result), localCLIStderrCap)),
+		}
+	}
+	if s := strings.TrimSpace(env.Result); s != "" {
+		return &LLMResponse{Content: s}, nil
+	}
+	return &LLMResponse{Content: strings.TrimSpace(stdout)}, nil
+}
+
+// qwenCLIAim points Qwen Code at one of the providers this project already
+// has, and returns nothing when nobody asked for one.
+//
+// Nothing is the right default: an empty aim leaves the CLI on its own login,
+// which is what somebody who installed it and signed in expects. Aiming it
+// somewhere is an act of configuration, and it reads the SAME endpoint entry
+// the text nodes use — a second copy of "where is LM Studio" is the copy that
+// is wrong the day the port changes.
+//
+// Only the OpenAI-compatible endpoints are served here. Anthropic and OpenAI
+// proper are reachable the same way, but they are reached by a key this engine
+// holds, and handing a person's console key to a subprocess that will spend it
+// under its own policy is a decision that belongs to them, not to a default.
+func (c *Config) qwenCLIAim() []string {
+	target := strings.ToLower(strings.TrimSpace(c.QwenCLIEndpoint))
+	if target == "" || !isOpenAICompatible(target) {
+		return nil
+	}
+	e := c.endpointFor(target)
+	url := strings.TrimSpace(e.URL)
+	if url == "" {
+		return nil
+	}
+	key := strings.TrimSpace(e.Key)
+	if key == "" {
+		// Un serveur local n'en demande pas, mais le client en exige une :
+		// sans valeur, Qwen Code réclame une connexion au lieu d'appeler.
+		key = "local"
+	}
+	return []string{"--auth-type", "openai", "--openai-base-url", url, "--openai-api-key", key}
 }
 
 // ---------- process ----------

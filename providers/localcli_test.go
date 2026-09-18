@@ -477,3 +477,269 @@ echo '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}'`
 		t.Fatalf("arguments = %q, want them to include --skip-git-repo-check", recorded)
 	}
 }
+
+// ---------- qwen (Qwen Code) ----------
+
+func qwenCfg(t *testing.T, body string) *Config {
+	t.Helper()
+	return &Config{QwenCLIPath: fakeCLI(t, body), LocalCLIWorkdir: t.TempDir()}
+}
+
+// L'enveloppe réelle de `qwen -o json` : un TABLEAU d'événements, dont le
+// dernier `result` porte la réponse. Relevée sur la vraie CLI (0.23.4), pas
+// reconstituée — c'est au mot près celle de Claude Code, à l'emballage près.
+func TestQwenCLIReadsTheArrayEnvelope(t *testing.T) {
+	script := `cat > /dev/null; echo '[{"type":"system","subtype":"init","session_id":"s1","model":"qwen2.5:0.5b","permission_mode":"plan"},` +
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"brouillon"}]}},` +
+		`{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"la réponse"}]'`
+	cfg := qwenCfg(t, script)
+
+	resp, err := cfg.localCLIComplete(context.Background(), userTurn("hi"), qwenCLIProvider)
+	if err != nil {
+		t.Fatalf("call failed: %v", err)
+	}
+	if resp.Content != "la réponse" {
+		t.Fatalf("content = %q, want the result event", resp.Content)
+	}
+}
+
+// Les trois emballages, un seul analyseur. Un deuxième serait une deuxième
+// chose à se tromper, et c'est le verdict d'un run qui en dépend.
+func TestResultEnvelopeAcceptsTheThreeShapes(t *testing.T) {
+	cases := []struct {
+		name   string
+		stdout string
+		want   string
+	}{
+		{"un objet, ce que claude imprime", `{"type":"result","subtype":"success","result":"un"}`, "un"},
+		{"un tableau, ce que qwen imprime", `[{"type":"system"},{"type":"result","subtype":"success","result":"deux"}]`, "deux"},
+		{
+			"une ligne par événement, les deux en stream-json",
+			"{\"type\":\"system\",\"subtype\":\"init\"}\n{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"trois\"}",
+			"trois",
+		},
+		{
+			"du bruit autour des événements ne casse rien",
+			"un avertissement qui n'est pas du JSON\n{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"quatre\"}",
+			"quatre",
+		},
+		{
+			"**un run qui rend son verdict deux fois : le dernier gagne**",
+			"{\"type\":\"result\",\"result\":\"avant\"}\n{\"type\":\"result\",\"result\":\"après\"}",
+			"après",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env, ok := resultEnvelope(tc.stdout)
+			if !ok {
+				t.Fatalf("aucune enveloppe reconnue dans %q", tc.stdout)
+			}
+			if env.Result != tc.want {
+				t.Fatalf("result = %q, want %q", env.Result, tc.want)
+			}
+		})
+	}
+
+	if _, ok := resultEnvelope("rien que du texte"); ok {
+		t.Fatal("du texte brut n'est pas une enveloppe : l'appelant doit pouvoir le rendre tel quel")
+	}
+	if _, ok := resultEnvelope("   "); ok {
+		t.Fatal("le vide n'est pas une enveloppe")
+	}
+}
+
+// Les trois drapeaux sans lesquels l'appel ne marche pas, et dont l'absence ne
+// se voit pas en lisant le code :
+//
+//   - --bare : sans lui la CLI fait sa découverte automatique avant de
+//     répondre. Mesuré sur la même question : 190 s contre 10 s.
+//   - --approval-mode plan : le défaut demande une approbation que personne ne
+//     peut donner à un sous-processus sans terminal.
+//   - -o json : sans lui la sortie est du texte d'interface, et le nœud
+//     récupère un affichage au lieu d'une réponse.
+func TestQwenCLISendsTheFlagsThatMakeItAnswer(t *testing.T) {
+	cfg := qwenCfg(t, `cat > /dev/null; printf '{"type":"result","subtype":"success","result":"%s"}\n' "$*"`)
+	cfg.QwenCLIModel = "qwen3-coder"
+
+	resp, err := cfg.localCLIComplete(context.Background(), LLMRequest{
+		Messages: []Message{
+			{Role: "system", Content: "Sois bref."},
+			{Role: "user", Content: "salut"},
+		},
+	}, qwenCLIProvider)
+	if err != nil {
+		t.Fatalf("call failed: %v", err)
+	}
+	for _, want := range []string{"--bare", "--approval-mode plan", "-o json", "-m qwen3-coder", "--append-system-prompt Sois bref."} {
+		if !strings.Contains(resp.Content, want) {
+			t.Fatalf("manque %q dans la ligne de commande %q", want, resp.Content)
+		}
+	}
+}
+
+// La question ne passe jamais par la table des processus : elle peut contenir
+// tout ce que le workflow a touché.
+func TestQwenCLIReceivesThePromptOnStdin(t *testing.T) {
+	cfg := qwenCfg(t, `printf '{"type":"result","subtype":"success","result":"stdin=[%s] args=[%s]"}\n' "$(cat)" "$*"`)
+
+	resp, err := cfg.localCLIComplete(context.Background(), userTurn("un secret"), qwenCLIProvider)
+	if err != nil {
+		t.Fatalf("call failed: %v", err)
+	}
+	if !strings.Contains(resp.Content, "stdin=[user: un secret]") {
+		t.Fatalf("la question n'est pas arrivée sur stdin : %q", resp.Content)
+	}
+	if strings.Contains(resp.Content, "args=[") && strings.Contains(strings.SplitN(resp.Content, "args=[", 2)[1], "un secret") {
+		t.Fatalf("la question est passée par la ligne de commande : %q", resp.Content)
+	}
+}
+
+// Ce qui distingue ce harnais des deux autres : on peut le viser, et il vise le
+// point d'accès que les nœuds de texte utilisent déjà.
+func TestQwenCLIIsAimedAtTheEndpointTheProjectAlreadyHas(t *testing.T) {
+	script := `cat > /dev/null; printf '{"type":"result","subtype":"success","result":"%s"}\n' "$*"`
+
+	t.Run("sans visée, il reste sur son propre compte", func(t *testing.T) {
+		cfg := qwenCfg(t, script)
+		resp, err := cfg.localCLIComplete(context.Background(), userTurn("hi"), qwenCLIProvider)
+		if err != nil {
+			t.Fatalf("call failed: %v", err)
+		}
+		for _, absent := range []string{"--auth-type", "--openai-base-url", "--openai-api-key"} {
+			if strings.Contains(resp.Content, absent) {
+				t.Fatalf("personne n'a demandé de visée, %q n'a rien à faire là : %q", absent, resp.Content)
+			}
+		}
+	})
+
+	t.Run("**visé, il prend l'adresse du fournisseur, pas une copie**", func(t *testing.T) {
+		cfg := qwenCfg(t, script)
+		cfg.QwenCLIEndpoint = LMStudioProvider
+		cfg.Endpoints = map[string]Endpoint{LMStudioProvider: {URL: "http://127.0.0.1:4242/v1", Key: "clef"}}
+
+		resp, err := cfg.localCLIComplete(context.Background(), userTurn("hi"), qwenCLIProvider)
+		if err != nil {
+			t.Fatalf("call failed: %v", err)
+		}
+		for _, want := range []string{"--auth-type openai", "--openai-base-url http://127.0.0.1:4242/v1", "--openai-api-key clef"} {
+			if !strings.Contains(resp.Content, want) {
+				t.Fatalf("manque %q dans %q", want, resp.Content)
+			}
+		}
+	})
+
+	t.Run("l'adresse par défaut du fournisseur suffit", func(t *testing.T) {
+		cfg := qwenCfg(t, script)
+		cfg.QwenCLIEndpoint = OllamaLocalProvider
+		cfg.Endpoints = map[string]Endpoint{OllamaLocalProvider: {}}
+
+		resp, err := cfg.localCLIComplete(context.Background(), userTurn("hi"), qwenCLIProvider)
+		if err != nil {
+			t.Fatalf("call failed: %v", err)
+		}
+		if !strings.Contains(resp.Content, "--openai-base-url "+DefaultEndpointURL(OllamaLocalProvider)) {
+			t.Fatalf("l'adresse par défaut d'Ollama devait servir : %q", resp.Content)
+		}
+		// Un serveur local ne demande pas de clef, mais le client en exige une.
+		if !strings.Contains(resp.Content, "--openai-api-key local") {
+			t.Fatalf("une clef de remplissage est nécessaire : %q", resp.Content)
+		}
+	})
+
+	t.Run("**un fournisseur nommé mais éteint ne vise nulle part**", func(t *testing.T) {
+		cfg := qwenCfg(t, script)
+		cfg.QwenCLIEndpoint = LMStudioProvider // pas d'entrée dans Endpoints
+		resp, err := cfg.localCLIComplete(context.Background(), userTurn("hi"), qwenCLIProvider)
+		if err != nil {
+			t.Fatalf("call failed: %v", err)
+		}
+		// Viser une adresse que personne n'a allumée, c'est un refus de
+		// connexion à la place d'une réponse. Mieux vaut le compte du harnais.
+		if strings.Contains(resp.Content, "--openai-base-url") {
+			t.Fatalf("rien n'était allumé, rien ne devait être visé : %q", resp.Content)
+		}
+	})
+
+	t.Run("un fournisseur qui n'est pas une adresse ne se vise pas", func(t *testing.T) {
+		cfg := qwenCfg(t, script)
+		cfg.QwenCLIEndpoint = "anthropic"
+		resp, err := cfg.localCLIComplete(context.Background(), userTurn("hi"), qwenCLIProvider)
+		if err != nil {
+			t.Fatalf("call failed: %v", err)
+		}
+		// Donner la clef console d'une personne à un sous-processus qui la
+		// dépensera sous sa propre politique est une décision qui lui revient.
+		if strings.Contains(resp.Content, "--auth-type") {
+			t.Fatalf("anthropic n'est pas un point d'accès visable ici : %q", resp.Content)
+		}
+	})
+}
+
+// Un échec doit dire pourquoi, pas « exit status 1 ».
+func TestQwenCLISurfacesAnErrorEnvelope(t *testing.T) {
+	cfg := qwenCfg(t, `cat > /dev/null; echo '[{"type":"result","subtype":"error","is_error":true,"result":"no model configured"}]'`)
+
+	_, err := cfg.localCLIComplete(context.Background(), userTurn("hi"), qwenCLIProvider)
+	pe := providerErr(t, err)
+	if pe.Code != "cli_error" {
+		t.Fatalf("code = %q, want cli_error", pe.Code)
+	}
+	if !strings.Contains(pe.Message, "no model configured") {
+		t.Fatalf("la raison du refus doit remonter, got %q", pe.Message)
+	}
+}
+
+// Le troisième harnais doit être un fournisseur comme les deux autres : nommé
+// par un nœud, listé, et reconnu comme local.
+func TestQwenCLIIsAFirstClassProvider(t *testing.T) {
+	script := fakeCLI(t, `cat > /dev/null; echo '[{"type":"result","subtype":"success","result":"routé"}]'`)
+	cfg := &Config{QwenCLIPath: script, QwenCLIModel: "qwen3-coder", LocalCLIWorkdir: t.TempDir()}
+
+	if got := cfg.resolveTextProvider("qwen-cli"); got != qwenCLIProvider {
+		t.Fatalf("resolveTextProvider(qwen-cli) = %q", got)
+	}
+	if got := cfg.TextModel("qwen-cli"); got != "qwen3-coder" {
+		t.Fatalf("TextModel(qwen-cli) = %q", got)
+	}
+	if got := cfg.TextCredential("qwen-cli"); got != script {
+		t.Fatalf("TextCredential(qwen-cli) = %q, want the resolved binary path", got)
+	}
+	if !cfg.LocalCLIAvailable("qwen-cli") {
+		t.Fatal("le faux binaire existe, donc le fournisseur est disponible")
+	}
+	if !IsCLIProvider(qwenCLIProvider) {
+		t.Fatal("qwen-cli est une CLI pilotée en sous-processus")
+	}
+	if !contains(TextProviders, qwenCLIProvider) {
+		t.Fatal("qwen-cli doit figurer dans TextProviders, sinon rien ne peut le nommer")
+	}
+	// Un serveur hébergé ne peut pas lancer la CLI de quelqu'un d'autre.
+	if contains(HostedTextProviders(), qwenCLIProvider) {
+		t.Fatal("qwen-cli ne doit jamais être proposé par le service hébergé")
+	}
+
+	resp, err := cfg.LLMComplete(context.Background(), LLMRequest{
+		Provider: "qwen-cli",
+		Messages: []Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("LLMComplete failed: %v", err)
+	}
+	if resp.Content != "routé" {
+		t.Fatalf("content = %q", resp.Content)
+	}
+}
+
+// Comme les deux autres : un nœud à outils ne peut pas être servi par une CLI.
+func TestQwenCLIRefusesToolCallingNodes(t *testing.T) {
+	cfg := qwenCfg(t, `echo '[]'`)
+	_, err := cfg.localCLIComplete(context.Background(), LLMRequest{
+		Messages: []Message{{Role: "user", Content: "hi"}},
+		Tools:    []Tool{{Type: "function"}},
+	}, qwenCLIProvider)
+	pe := providerErr(t, err)
+	if pe.Code != "unsupported" {
+		t.Fatalf("code = %q, want unsupported", pe.Code)
+	}
+}
