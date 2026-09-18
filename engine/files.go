@@ -136,6 +136,10 @@ func (r *Runtime) runFileInput(in *RunInput) (*NodeOutput, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot read %s: %w", path, err)
 	}
+	// D'où vient ce qui suit. Retenu ici parce que c'est le seul endroit où un
+	// chemin entre dans un graphe : tout ce qui descend de ce nœud en hérite
+	// par les arêtes, sans qu'aucun nœud ait à recopier quoi que ce soit.
+	r.rememberSource(in.Node.ID, path)
 	if len(data) > maxFileInputBytes {
 		// A *providers.ProviderError, like a provider refusing an oversized
 		// request, because this is the same class of refusal: the file is fine,
@@ -252,6 +256,15 @@ func (r *Runtime) runFileOutput(in *RunInput) (*NodeOutput, error) {
 		return nil, fmt.Errorf("file output node has nothing to write: connect the node whose result should be saved")
 	}
 	resolvedPath, err := r.resolveInputs(str(in.Config["path"]))
+	if err != nil {
+		return nil, err
+	}
+	// Puis d'où venait ce qu'on écrit : `{{sourceStem}}-hd{{sourceExt}}` nomme
+	// la sortie d'après l'entrée, ce qui est toute la différence entre un
+	// graphe qu'on édite entre deux fichiers et un graphe qu'on lance sur un
+	// dossier. Les deux résolutions sont dans cet ordre parce qu'une entrée de
+	// run peut nommer le fichier à lire, jamais l'inverse.
+	resolvedPath, err = r.resolveSource(resolvedPath, in.Node.ID)
 	if err != nil {
 		return nil, err
 	}

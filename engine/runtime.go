@@ -62,6 +62,13 @@ type Runtime struct {
 	// there (see files.go).
 	Files FileAccess
 
+	// Sources is what each file input read, by node id — the only way a path
+	// enters a graph. Everything downstream inherits from it along the edges
+	// rather than by copying a key from output to output, so no node has to
+	// cooperate and a node replayed from the cache keeps its provenance. See
+	// provenance.go.
+	Sources map[string]string
+
 	// Plugins holds the node types this host can run: the bundled pack the
 	// engine ships, and whatever the project installed on top of it. A type the
 	// switch in executeWithInput has no case for is looked up here before the
