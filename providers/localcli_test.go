@@ -597,19 +597,32 @@ func TestQwenCLIReceivesThePromptOnStdin(t *testing.T) {
 
 // Ce qui distingue ce harnais des deux autres : on peut le viser, et il vise le
 // point d'accès que les nœuds de texte utilisent déjà.
+//
+// Le faux binaire rapporte sa ligne de commande ET les deux variables qui
+// comptent, parce que le contrat porte sur les deux : l'adresse et la clef
+// passent par l'environnement, jamais par les arguments — `ps` les montrerait
+// à tout ce qui tourne sur la machine.
 func TestQwenCLIIsAimedAtTheEndpointTheProjectAlreadyHas(t *testing.T) {
-	script := `cat > /dev/null; printf '{"type":"result","subtype":"success","result":"%s"}\n' "$*"`
+	script := `cat > /dev/null; printf '{"type":"result","subtype":"success","result":"args=[%s] url=[%s] key=[%s]"}\n' "$*" "$OPENAI_BASE_URL" "$OPENAI_API_KEY"`
 
-	t.Run("sans visée, il reste sur son propre compte", func(t *testing.T) {
-		cfg := qwenCfg(t, script)
+	run := func(t *testing.T, cfg *Config) string {
+		t.Helper()
 		resp, err := cfg.localCLIComplete(context.Background(), userTurn("hi"), qwenCLIProvider)
 		if err != nil {
 			t.Fatalf("call failed: %v", err)
 		}
+		return resp.Content
+	}
+
+	t.Run("sans visée, il reste sur son propre compte", func(t *testing.T) {
+		out := run(t, qwenCfg(t, script))
 		for _, absent := range []string{"--auth-type", "--openai-base-url", "--openai-api-key"} {
-			if strings.Contains(resp.Content, absent) {
-				t.Fatalf("personne n'a demandé de visée, %q n'a rien à faire là : %q", absent, resp.Content)
+			if strings.Contains(out, absent) {
+				t.Fatalf("personne n'a demandé de visée, %q n'a rien à faire là : %q", absent, out)
 			}
+		}
+		if !strings.Contains(out, "url=[]") || !strings.Contains(out, "key=[]") {
+			t.Fatalf("aucune adresse ne devait être posée dans l'environnement : %q", out)
 		}
 	})
 
@@ -618,14 +631,35 @@ func TestQwenCLIIsAimedAtTheEndpointTheProjectAlreadyHas(t *testing.T) {
 		cfg.QwenCLIEndpoint = LMStudioProvider
 		cfg.Endpoints = map[string]Endpoint{LMStudioProvider: {URL: "http://127.0.0.1:4242/v1", Key: "clef"}}
 
-		resp, err := cfg.localCLIComplete(context.Background(), userTurn("hi"), qwenCLIProvider)
-		if err != nil {
-			t.Fatalf("call failed: %v", err)
+		out := run(t, cfg)
+		if !strings.Contains(out, "url=[http://127.0.0.1:4242/v1]") {
+			t.Fatalf("l'adresse devait arriver par l'environnement : %q", out)
 		}
-		for _, want := range []string{"--auth-type openai", "--openai-base-url http://127.0.0.1:4242/v1", "--openai-api-key clef"} {
-			if !strings.Contains(resp.Content, want) {
-				t.Fatalf("manque %q dans %q", want, resp.Content)
-			}
+		if !strings.Contains(out, "key=[clef]") {
+			t.Fatalf("la clef devait arriver par l'environnement : %q", out)
+		}
+		if !strings.Contains(out, "--auth-type openai") {
+			t.Fatalf("le type d'authentification manque : %q", out)
+		}
+	})
+
+	// Le fond de l'affaire : une clef sur la ligne de commande se lit dans `ps`.
+	// Ce fichier écrit déjà la question sur stdin pour cette raison exacte.
+	t.Run("**et la clef ne passe jamais par la ligne de commande**", func(t *testing.T) {
+		cfg := qwenCfg(t, script)
+		cfg.QwenCLIEndpoint = CustomProvider
+		cfg.Endpoints = map[string]Endpoint{CustomProvider: {URL: "https://exemple.test/v1", Key: "sk-tres-secrete"}}
+
+		out := run(t, cfg)
+		args := strings.SplitN(strings.SplitN(out, "args=[", 2)[1], "]", 2)[0]
+		if strings.Contains(args, "sk-tres-secrete") {
+			t.Fatalf("la clef est dans la table des processus : %q", args)
+		}
+		if strings.Contains(args, "exemple.test") {
+			t.Fatalf("l'adresse est passée par les arguments : %q", args)
+		}
+		if !strings.Contains(out, "key=[sk-tres-secrete]") {
+			t.Fatalf("mais elle doit bien arriver à la CLI : %q", out)
 		}
 	})
 
@@ -634,44 +668,35 @@ func TestQwenCLIIsAimedAtTheEndpointTheProjectAlreadyHas(t *testing.T) {
 		cfg.QwenCLIEndpoint = OllamaLocalProvider
 		cfg.Endpoints = map[string]Endpoint{OllamaLocalProvider: {}}
 
-		resp, err := cfg.localCLIComplete(context.Background(), userTurn("hi"), qwenCLIProvider)
-		if err != nil {
-			t.Fatalf("call failed: %v", err)
-		}
-		if !strings.Contains(resp.Content, "--openai-base-url "+DefaultEndpointURL(OllamaLocalProvider)) {
-			t.Fatalf("l'adresse par défaut d'Ollama devait servir : %q", resp.Content)
+		out := run(t, cfg)
+		if !strings.Contains(out, "url=["+DefaultEndpointURL(OllamaLocalProvider)+"]") {
+			t.Fatalf("l'adresse par défaut d'Ollama devait servir : %q", out)
 		}
 		// Un serveur local ne demande pas de clef, mais le client en exige une.
-		if !strings.Contains(resp.Content, "--openai-api-key local") {
-			t.Fatalf("une clef de remplissage est nécessaire : %q", resp.Content)
+		if !strings.Contains(out, "key=[local]") {
+			t.Fatalf("une clef de remplissage est nécessaire : %q", out)
 		}
 	})
 
 	t.Run("**un fournisseur nommé mais éteint ne vise nulle part**", func(t *testing.T) {
 		cfg := qwenCfg(t, script)
 		cfg.QwenCLIEndpoint = LMStudioProvider // pas d'entrée dans Endpoints
-		resp, err := cfg.localCLIComplete(context.Background(), userTurn("hi"), qwenCLIProvider)
-		if err != nil {
-			t.Fatalf("call failed: %v", err)
-		}
 		// Viser une adresse que personne n'a allumée, c'est un refus de
 		// connexion à la place d'une réponse. Mieux vaut le compte du harnais.
-		if strings.Contains(resp.Content, "--openai-base-url") {
-			t.Fatalf("rien n'était allumé, rien ne devait être visé : %q", resp.Content)
+		if out := run(t, cfg); !strings.Contains(out, "url=[]") {
+			t.Fatalf("rien n'était allumé, rien ne devait être visé : %q", out)
 		}
 	})
 
 	t.Run("un fournisseur qui n'est pas une adresse ne se vise pas", func(t *testing.T) {
 		cfg := qwenCfg(t, script)
 		cfg.QwenCLIEndpoint = "anthropic"
-		resp, err := cfg.localCLIComplete(context.Background(), userTurn("hi"), qwenCLIProvider)
-		if err != nil {
-			t.Fatalf("call failed: %v", err)
-		}
+		cfg.AnthropicAPIKey = "sk-ant-ne-doit-pas-sortir"
 		// Donner la clef console d'une personne à un sous-processus qui la
 		// dépensera sous sa propre politique est une décision qui lui revient.
-		if strings.Contains(resp.Content, "--auth-type") {
-			t.Fatalf("anthropic n'est pas un point d'accès visable ici : %q", resp.Content)
+		out := run(t, cfg)
+		if strings.Contains(out, "--auth-type") || strings.Contains(out, "sk-ant-ne-doit-pas-sortir") {
+			t.Fatalf("anthropic n'est pas un point d'accès visable ici : %q", out)
 		}
 	})
 }

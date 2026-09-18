@@ -367,3 +367,64 @@ func TestEveryKeyProviderReachesTheConfig(t *testing.T) {
 		t.Fatalf("le catalogue n'a offert que %d fournisseurs à clé : le test ne prouve plus rien", tried)
 	}
 }
+
+// Un harnais visé sur un point d'accès distant a besoin de sa clef, et c'est
+// la seule route qui en rend une. Ce test épingle les deux moitiés du marché :
+// elle la rend à qui la demande par son nom, et le catalogue, lui, ne la dit
+// toujours pas.
+func TestTheEndpointCanBeReadBackForAnAgentThatNeedsIt(t *testing.T) {
+	e := newTestEnv(t)
+	if res := e.do("PUT", "/api/providers/custom/endpoint", map[string]string{
+		"url": "https://exemple.test/v1", "key": "sk-tres-secrete", "model": "un-modele",
+	}); res.Code != http.StatusOK {
+		t.Fatalf("save: %d %s", res.Code, res.Body)
+	}
+
+	res := e.do("GET", "/api/providers/custom/endpoint", nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("read back: %d %s", res.Code, res.Body)
+	}
+	var got struct {
+		URL   string `json:"url"`
+		Key   string `json:"key"`
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.URL != "https://exemple.test/v1" || got.Key != "sk-tres-secrete" || got.Model != "un-modele" {
+		t.Fatalf("l'agent ne peut pas joindre le serveur avec ça : %+v", got)
+	}
+
+	// Le catalogue est affiché ; une clef qu'on affiche est une clef qu'on
+	// finit par recopier ailleurs.
+	catalogue := e.do("GET", "/api/providers", nil).Body.String()
+	if strings.Contains(catalogue, "sk-tres-secrete") {
+		t.Fatal("la clef est descendue dans le catalogue, qui est affiché")
+	}
+
+	// L'adresse par défaut vient du moteur : quelqu'un qui allume LM Studio en
+	// choisissant seulement un modèle a un serveur qui marche, et lire le
+	// fichier brut ici rendrait une adresse vide pour ce cas-là.
+	if res := e.do("PUT", "/api/providers/lmstudio/endpoint", map[string]string{"model": "qwen3-coder"}); res.Code != http.StatusOK {
+		t.Fatalf("enable: %d %s", res.Code, res.Body)
+	}
+	var vide struct {
+		URL string `json:"url"`
+	}
+	_ = json.Unmarshal(e.do("GET", "/api/providers/lmstudio/endpoint", nil).Body.Bytes(), &vide)
+	if vide.URL != providers.DefaultEndpointURL("lmstudio") {
+		t.Fatalf("l'adresse par défaut devait être remplie : %q", vide.URL)
+	}
+}
+
+// Un fournisseur qui n'est pas configuré par une adresse n'a pas d'adresse à
+// rendre — et surtout pas la clef console qu'il détient par ailleurs.
+func TestOnlyAddressProvidersAnswerTheEndpointRead(t *testing.T) {
+	e := newTestEnv(t)
+	for _, id := range []string{"anthropic", "openai", "claude-cli", "inconnu"} {
+		if res := e.do("GET", "/api/providers/"+id+"/endpoint", nil); res.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s", id, res.Code, res.Body)
+		}
+	}
+}

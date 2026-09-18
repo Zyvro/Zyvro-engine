@@ -437,9 +437,10 @@ func (c *Config) qwenCLIComplete(ctx context.Context, system, prompt, model stri
 	if system != "" {
 		args = append(args, "--append-system-prompt", system)
 	}
-	args = append(args, c.qwenCLIAim()...)
+	flags, aimEnv := c.qwenCLIAim()
+	args = append(args, flags...)
 
-	stdout, err := c.runLocalCLI(ctx, qwenCLIProvider, args, prompt)
+	stdout, err := c.runLocalCLI(ctx, qwenCLIProvider, args, prompt, aimEnv...)
 	if err != nil {
 		return nil, err
 	}
@@ -461,27 +462,35 @@ func (c *Config) qwenCLIComplete(ctx context.Context, system, prompt, model stri
 }
 
 // qwenCLIAim points Qwen Code at one of the providers this project already
-// has, and returns nothing when nobody asked for one.
+// has: des drapeaux d'un côté, un environnement de l'autre.
 //
-// Nothing is the right default: an empty aim leaves the CLI on its own login,
-// which is what somebody who installed it and signed in expects. Aiming it
-// somewhere is an act of configuration, and it reads the SAME endpoint entry
-// the text nodes use — a second copy of "where is LM Studio" is the copy that
-// is wrong the day the port changes.
+// **La clef ne passe pas par la ligne de commande.** `ps` la montrerait à tout
+// ce qui tourne sur la machine, et ce fichier prend déjà soin d'écrire la
+// question sur stdin pour cette raison exacte — une clef mérite au moins
+// autant. Qwen Code lit `OPENAI_BASE_URL` et `OPENAI_API_KEY` dans son
+// environnement : vérifié à la sonde, il poste alors sur
+// `/v1/chat/completions` avec `Authorization: Bearer …` sans qu'aucun drapeau
+// ne les nomme.
 //
-// Only the OpenAI-compatible endpoints are served here. Anthropic and OpenAI
-// proper are reachable the same way, but they are reached by a key this engine
-// holds, and handing a person's console key to a subprocess that will spend it
-// under its own policy is a decision that belongs to them, not to a default.
-func (c *Config) qwenCLIAim() []string {
+// Rien n'est visé par défaut : un environnement vide laisse la CLI sur son
+// propre compte, ce qu'attend quelqu'un qui l'a installée et s'y est connecté.
+// Viser est un acte de configuration, et il lit la MÊME entrée de point d'accès
+// que les nœuds de texte — une deuxième idée de « où est LM Studio » serait
+// celle qui a tort le jour où le port change.
+//
+// Seuls les points d'accès compatibles OpenAI sont servis ici. Anthropic et
+// OpenAI se joignent de la même façon, mais par une clef que ce moteur détient
+// pour son propre compte, et la confier à un sous-processus qui la dépensera
+// sous sa propre politique est une décision qui revient à la personne.
+func (c *Config) qwenCLIAim() (flags []string, env []string) {
 	target := strings.ToLower(strings.TrimSpace(c.QwenCLIEndpoint))
 	if target == "" || !isOpenAICompatible(target) {
-		return nil
+		return nil, nil
 	}
 	e := c.endpointFor(target)
 	url := strings.TrimSpace(e.URL)
 	if url == "" {
-		return nil
+		return nil, nil
 	}
 	key := strings.TrimSpace(e.Key)
 	if key == "" {
@@ -489,7 +498,10 @@ func (c *Config) qwenCLIAim() []string {
 		// sans valeur, Qwen Code réclame une connexion au lieu d'appeler.
 		key = "local"
 	}
-	return []string{"--auth-type", "openai", "--openai-base-url", url, "--openai-api-key", key}
+	return []string{"--auth-type", "openai"}, []string{
+		"OPENAI_BASE_URL=" + url,
+		"OPENAI_API_KEY=" + key,
+	}
 }
 
 // ---------- process ----------
@@ -498,7 +510,7 @@ func (c *Config) qwenCLIAim() []string {
 // written to stdin rather than passed as an argument so it never lands in the
 // process table, and it is never echoed into an error or a log: it can hold
 // anything the workflow touched.
-func (c *Config) runLocalCLI(ctx context.Context, kind string, args []string, stdin string) (string, error) {
+func (c *Config) runLocalCLI(ctx context.Context, kind string, args []string, stdin string, extraEnv ...string) (string, error) {
 	bin, install := c.localCLIBinary(kind)
 
 	timeout := c.LocalCLITimeout
@@ -525,7 +537,10 @@ func (c *Config) runLocalCLI(ctx context.Context, kind string, args []string, st
 	// The CLI finds its own session in the user's home directory and needs the
 	// inherited PATH to locate its helpers, so the environment is passed through
 	// deliberately rather than by default.
-	cmd.Env = os.Environ()
+	//
+	// Et c'est par là que passe ce qui ne doit pas se lire dans `ps` : une clef
+	// de point d'accès est ajoutée ici, jamais dans les arguments.
+	cmd.Env = append(os.Environ(), extraEnv...)
 
 	err := cmd.Run()
 	if err == nil {

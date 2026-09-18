@@ -307,6 +307,7 @@ func (d *daemon) handler() http.Handler {
 	api.HandleFunc("GET /api/workflows/{id}/executions/last", d.getLastExecution)
 	api.HandleFunc("GET /api/providers", d.listProviders)
 	api.HandleFunc("PUT /api/providers/order", d.setProviderOrder)
+	api.HandleFunc("GET /api/providers/{id}/endpoint", d.getProviderEndpoint)
 	api.HandleFunc("PUT /api/providers/{id}/endpoint", d.setProviderEndpoint)
 	api.HandleFunc("GET /api/providers/{id}/models", d.providerModels)
 	api.HandleFunc("GET /api/secrets", d.listSecrets)
@@ -1230,6 +1231,42 @@ func (d *daemon) setProviderOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"order": clean})
+}
+
+// getProviderEndpoint rend une adresse et sa clef, à un appelant qui en a
+// besoin pour parler au serveur lui-même.
+//
+// C'est la seule route de ce fichier qui rend une clef, et elle existe pour une
+// raison précise : l'application de bureau lance des agents en ligne de commande
+// qui, eux, appellent ce serveur directement. Sans la clef, un harnais visé sur
+// un point d'accès distant se voit refuser l'accès — c'est exactement ce que
+// disait le point resté ouvert de la liste.
+//
+// Ce qui rend cela acceptable, et qui doit le rester : le démon n'écoute que
+// sur 127.0.0.1, chaque appel porte le jeton tiré au démarrage, les origines
+// sont limitées, et la clef en question est celle que cette personne a tapée
+// pour son propre serveur. Elle ne descend pas dans `/api/providers` pour
+// autant — ce catalogue est affiché, et une clef qu'on affiche est une clef
+// qu'on finit par recopier ailleurs.
+//
+// Le côté bureau, lui, la garde dans son processus principal et la passe à
+// l'agent par son environnement, jamais par ses arguments.
+func (d *daemon) getProviderEndpoint(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !isEndpointProvider(id) {
+		writeErr(w, http.StatusBadRequest, "that provider is not configured by an address")
+		return
+	}
+	// Par le moteur plutôt que par le fichier : c'est lui qui remplit l'adresse
+	// par défaut pour quelqu'un qui a coché la case sans rien taper, et lire le
+	// fichier directement ici rendrait une adresse vide pour un serveur qui
+	// marche.
+	e := d.providerConfig().EndpointFor(id)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"url":   e.URL,
+		"key":   e.Key,
+		"model": e.Model,
+	})
 }
 
 // setProviderEndpoint records where one local server is and which model it
