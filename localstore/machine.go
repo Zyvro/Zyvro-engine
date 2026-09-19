@@ -245,3 +245,27 @@ func (m *Machine) write(data machineData) error {
 	}
 	return writeJSONAtomicMode(m.path(), data, machineFileMode)
 }
+
+// HomeWorkspace est le dossier à ouvrir quand aucun projet ne l'est.
+//
+// « Les agents utilisables même si aucun projet n'est ouvert, ce sont des
+// agents globaux » — et un agent a besoin d'un endroit où travailler. Plutôt
+// qu'un cas particulier dans chaque appel — pas de dossier, donc pas de shell,
+// pas d'agent, pas de catalogue de fournisseurs, pas de liste de modèles —
+// il y a un dossier, toujours, et le reste du code n'a pas à savoir lequel.
+//
+// À côté de la configuration, parce que c'est la même affaire : ce qui
+// appartient à la personne plutôt qu'à un projet. Et un vrai projet, avec son
+// `.zyvro` : un agent global qui écrit un fichier l'écrit quelque part, et
+// « quelque part » doit être un endroit qu'on peut nommer et retrouver.
+func HomeWorkspace() (string, error) {
+	base, err := MachineDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(base, "home")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return dir, nil
+}

@@ -43,6 +43,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "print the engine version and exit")
 	nodeTypes := flag.Bool("node-types", false, "print the node types this engine runs, one per line, and exit")
 	inputTypes := flag.Bool("runtime-input-types", false, "print the node types a run can fill by name, one per line, and exit")
+	home := flag.Bool("home", false, "print the folder to open when no project is open, creating it, and exit")
 	flag.Parse()
 
 	// --version answers before anything else is checked. It is what an updater
@@ -50,6 +51,28 @@ func main() {
 	// has no project folder to open.
 	if *showVersion {
 		fmt.Println(versionLine())
+		return
+	}
+
+	// --home answers before the project check, and for a reason of its own : le
+	// poste desktop en a besoin AVANT d'avoir un projet, justement.
+	//
+	// Il existe pour qu'il n'y ait pas deux idées de « où Zyvro range ses
+	// affaires ». Le dossier de configuration est choisi ici, par le système
+	// (`os.UserConfigDir`), et le poste desktop le demande plutôt que de le
+	// recalculer — sans quoi un jour l'un des deux changerait de chemin et
+	// l'autre continuerait de lire l'ancien.
+	//
+	// Ce dossier est un vrai projet, parce que c'est ce qu'il faut pour que les
+	// agents, les shells et les fournisseurs marchent sans qu'un projet soit
+	// ouvert : il leur faut un endroit où travailler, pas un cas particulier
+	// dans chaque appel.
+	if *home {
+		dir, err := localstore.HomeWorkspace()
+		if err != nil {
+			fatal("home workspace: %v", err)
+		}
+		fmt.Println(dir)
 		return
 	}
 
