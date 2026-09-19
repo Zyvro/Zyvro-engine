@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -168,13 +169,41 @@ func (c *Config) ModelList(ctx context.Context, provider string) ([]string, erro
 	if err != nil {
 		return nil, err
 	}
+	return parseModelList(raw, e.URL)
+}
+
+// parseModelList sépare « ce serveur n'a rien de chargé » de « ce n'est pas un
+// serveur de modèles », et c'est toute la raison d'être de cette fonction.
+//
+// Le défaut qu'elle répare, signalé par Jeremy et reproduit : LM Studio rend
+// **200** avec `{"error":"Unexpected endpoint or method. (GET /models)"}` quand
+// on tape son adresse sans `/v1`. Le corps se décodait sans broncher dans une
+// structure qui ignore les champs inconnus — pas de `data`, donc zéro modèle —
+// et remontait comme un succès. Le panneau des fournisseurs disait « le serveur
+// a répondu, mais aucun modèle n'est chargé » et le sélecteur de modèles
+// « aucun serveur local ne répond » : deux phrases fausses, sur un serveur qui
+// répondait et qui avait trois modèles.
+//
+// Un `data` présent mais vide reste une liste vide : c'est ce que rend un
+// serveur allumé sans modèle chargé, et c'est une réponse, pas une panne.
+func parseModelList(raw []byte, base string) ([]string, error) {
 	var parsed struct {
 		Data []struct {
 			ID string `json:"id"`
 		} `json:"data"`
+		Error json.RawMessage `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return nil, fmt.Errorf("that address did not answer with a model list")
+		return nil, notAModelList(base, "")
+	}
+	if said := errorText(parsed.Error); said != "" {
+		return nil, notAModelList(base, said)
+	}
+	// `data: []` rend une tranche vide mais non nulle, `data` absent la laisse
+	// nulle : la distinction était déjà là, c'est de ne pas l'avoir regardée
+	// qui faisait passer une erreur pour une liste vide.
+	if parsed.Data == nil {
+		return nil, notAModelList(base, "")
 	}
 	out := make([]string, 0, len(parsed.Data))
 	for _, m := range parsed.Data {
@@ -184,4 +213,41 @@ func (c *Config) ModelList(ctx context.Context, provider string) ([]string, erro
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// notAModelList dit ce qui est arrivé, avec les mots du serveur quand il en a,
+// et nomme la cause la plus probable quand l'adresse n'a pas de `/v1`.
+//
+// La suggestion plutôt que la correction : réécrire l'adresse de quelqu'un en
+// douce marcherait ici et trahirait le jour où un serveur sert vraiment à la
+// racine. Une phrase qu'on lit et qu'on applique en dix secondes vaut mieux
+// qu'une magie qu'on ne retrouve pas.
+func notAModelList(base, said string) error {
+	msg := "that address did not answer with a model list"
+	if said != "" {
+		msg = fmt.Sprintf("that address answered %q instead of a model list", truncate(said, 160))
+	}
+	if trimmed := strings.TrimSuffix(strings.TrimSpace(base), "/"); trimmed != "" && !strings.HasSuffix(trimmed, "/v1") {
+		msg += fmt.Sprintf("; the address usually ends in /v1 — try %s/v1", trimmed)
+	}
+	return errors.New(msg)
+}
+
+// errorText tire la phrase d'un champ `error`, qu'il soit une chaîne (LM Studio)
+// ou un objet à `message` (OpenAI et tout ce qui l'imite).
+func errorText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return strings.TrimSpace(s)
+	}
+	var obj struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(raw, &obj) == nil {
+		return strings.TrimSpace(obj.Message)
+	}
+	return ""
 }

@@ -347,3 +347,84 @@ func TestTheImageEndpointIsNeverOfferedByTheHostedService(t *testing.T) {
 		t.Error("the hosted image list lost a real backend")
 	}
 }
+
+// Le cas de Jeremy, reproduit tel quel : LM Studio rend **200** avec un objet
+// d'erreur quand on tape son adresse sans `/v1`. La version d'avant décodait ce
+// corps sans broncher — pas de `data`, donc zéro modèle — et le rendait comme un
+// succès. Deux écrans affichaient alors une phrase fausse sur un serveur qui
+// répondait et qui avait trois modèles : « le serveur a répondu, mais aucun
+// modèle n'est chargé », et « aucun serveur local ne répond ».
+func TestAServerAnsweringWithAnErrorIsNotAnEmptyList(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 200, exactement comme LM Studio.
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"error":"Unexpected endpoint or method. (GET /models)"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := &Config{Endpoints: map[string]Endpoint{LMStudioProvider: {URL: srv.URL}}}
+	got, err := c.ModelList(context.Background(), LMStudioProvider)
+	if err == nil {
+		t.Fatalf("a body saying « error » came back as a list of %d models", len(got))
+	}
+	// Les mots du serveur, parce que ce sont eux qui nomment la faute.
+	if !strings.Contains(err.Error(), "Unexpected endpoint or method") {
+		t.Errorf("la phrase du serveur est perdue : %v", err)
+	}
+	// Et la cause la plus probable, nommée : l'adresse sans /v1.
+	if !strings.Contains(err.Error(), "/v1") {
+		t.Errorf("rien ne suggère le /v1 manquant : %v", err)
+	}
+}
+
+// Un objet d'erreur à la mode OpenAI dit la même chose autrement, et les deux
+// formes se rencontrent sur des serveurs qui parlent la même API.
+func TestAnErrorObjectIsReadToo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"error":{"message":"model backend is starting","type":"server_error"}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := &Config{Endpoints: map[string]Endpoint{CustomProvider: {URL: srv.URL + "/v1"}}}
+	_, err := c.ModelList(context.Background(), CustomProvider)
+	if err == nil || !strings.Contains(err.Error(), "model backend is starting") {
+		t.Fatalf("expected the server's own words, got %v", err)
+	}
+	// L'adresse finit par /v1 : rien à suggérer, et le dire serait du bruit.
+	if strings.Contains(err.Error(), "try") {
+		t.Errorf("suggère un /v1 à une adresse qui en a déjà un : %v", err)
+	}
+}
+
+// Et la distinction qui donne son sens à tout le reste : un serveur allumé sans
+// modèle chargé rend `data: []`, et c'est une réponse. La confondre avec une
+// panne ferait mentir l'écran dans l'autre sens.
+func TestAnEmptyDataArrayIsStillAnAnswer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[],"object":"list"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := &Config{Endpoints: map[string]Endpoint{LMStudioProvider: {URL: srv.URL + "/v1"}}}
+	got, err := c.ModelList(context.Background(), LMStudioProvider)
+	if err != nil {
+		t.Fatalf("un serveur sans modèle chargé est une panne : %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("models = %v", got)
+	}
+}
+
+// Un corps qui n'a rien à voir — un JSON valide sans `data` — n'est pas une
+// liste vide non plus.
+func TestJSONWithoutADataArrayIsNotAList(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true,"models":["a","b"]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := &Config{Endpoints: map[string]Endpoint{CustomProvider: {URL: srv.URL}}}
+	if _, err := c.ModelList(context.Background(), CustomProvider); err == nil {
+		t.Fatal("un corps sans « data » est passé pour une liste vide")
+	}
+}
