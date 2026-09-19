@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"image"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -346,6 +346,55 @@ func InputKey(n *GraphNode) string {
 		return strings.TrimSpace(str(cfg["inputKey"]))
 	}
 	return ""
+}
+
+// GraphUsesInput reports whether a run started with an input of this name
+// would reach anything at all.
+//
+// It exists for the batch driver, and the failure it prevents is the expensive
+// one: a batch drives the same graph 519 times, changing one input each time,
+// and if that input reaches nothing then all 519 runs read the same file and
+// write over the same output — 519 model calls to end up with one wrong file
+// and no error anywhere. Caught once, before the first run, rather than
+// discovered at the end.
+//
+// The two ways an input reaches a graph, and there are only two: a
+// {{input:name}} anywhere in a node's configuration (which is how a fileInput
+// path is parameterised), or a runtime input node addressable by that name —
+// the same three names runtimeValueFor tries, in the same order, because a
+// second answer here would be a batch refused for an input that works.
+func GraphUsesInput(g *Graph, name string) bool {
+	name = strings.TrimSpace(name)
+	if g == nil || name == "" {
+		return false
+	}
+	placeholder := "{{input:" + name + "}}"
+	for i := range g.Nodes {
+		n := &g.Nodes[i]
+		if isRuntimeInputType(n.Type) {
+			for _, key := range []string{InputKey(n), n.ID, str(n.Data["label"])} {
+				if key == name {
+					return true
+				}
+			}
+		}
+		// The whole node data rather than the config map: a placeholder can sit
+		// in a nested setting, and a scan that only knew about the shapes we
+		// have today would go quietly wrong the first time one is added.
+		if b, err := json.Marshal(n.Data); err == nil && strings.Contains(string(b), placeholder) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRuntimeInputType(t string) bool {
+	for _, rt := range RuntimeInputTypes {
+		if rt == t {
+			return true
+		}
+	}
+	return false
 }
 
 // runtimeValueFor answers under which name a caller-supplied value reached

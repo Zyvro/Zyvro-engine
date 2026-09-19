@@ -156,6 +156,12 @@ type daemon struct {
 	mu      sync.RWMutex
 	plugins *plugins.Registry
 	packs   []packInfo
+
+	// batchMu guards batchStop, which holds the cancel of every batch this
+	// process is driving. A batch is the one thing here that can run for hours,
+	// so it is the one thing that has to be stoppable by name.
+	batchMu   sync.Mutex
+	batchStop map[string]context.CancelFunc
 }
 
 func newDaemon(store *localstore.Store) (*daemon, error) {
@@ -305,6 +311,11 @@ func (d *daemon) handler() http.Handler {
 	api.HandleFunc("GET /api/executions/{id}", d.getExecution)
 	api.HandleFunc("GET /api/workflows/{id}/executions", d.listWorkflowExecutions)
 	api.HandleFunc("GET /api/workflows/{id}/executions/last", d.getLastExecution)
+	api.HandleFunc("POST /api/batches", d.createBatch)
+	api.HandleFunc("GET /api/batches/{id}", d.getBatch)
+	api.HandleFunc("POST /api/batches/{id}/retry", d.retryBatch)
+	api.HandleFunc("POST /api/batches/{id}/cancel", d.cancelBatch)
+	api.HandleFunc("GET /api/workflows/{id}/batches", d.listWorkflowBatches)
 	api.HandleFunc("GET /api/providers", d.listProviders)
 	api.HandleFunc("PUT /api/providers/order", d.setProviderOrder)
 	api.HandleFunc("GET /api/providers/{id}/endpoint", d.getProviderEndpoint)
@@ -518,6 +529,10 @@ type runRequest struct {
 	UseCache *bool `json:"use_cache"`
 	// TargetNodeID runs only that node and its uncached ancestors.
 	TargetNodeID string `json:"target_node_id"`
+	// batchID marks a run as one item of a batch. Unexported on purpose:
+	// encoding/json never fills it, so a caller cannot claim membership of a
+	// batch it did not start — only the driver in batch.go sets it.
+	batchID string
 }
 
 // runExecution is POST /api/executions: it starts the run and answers straight
@@ -530,12 +545,7 @@ func (d *daemon) runExecution(w http.ResponseWriter, r *http.Request) {
 	}
 	run, err := d.startRun(req)
 	if err != nil {
-		var re *runError
-		if errors.As(err, &re) {
-			writeErr(w, re.status, re.msg)
-			return
-		}
-		writeErr(w, http.StatusInternalServerError, "failed to create execution")
+		writeRunErr(w, err, "failed to create execution")
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
@@ -568,24 +578,61 @@ func storeRunError(err error, msg string) error {
 // to a goroutine. There is no queue: one desktop user means the run can start
 // immediately.
 //
-// This is the only place a run begins. POST /api/executions and the MCP
+// This is where a run begins on its own. POST /api/executions and the MCP
 // zyvro_run_workflow tool both come through here, so the agent in the chat
 // panel and the builder cannot end up with two different ideas of what a
-// runnable workflow is.
+// runnable workflow is — and the batch driver, which cannot use this one
+// because it has to wait for each item, goes through prepareRun below so that
+// idea stays single.
 func (d *daemon) startRun(req runRequest) (*localstore.Run, error) {
-	if req.WorkflowID == "" {
-		return nil, &runError{http.StatusBadRequest, "workflow_id required"}
-	}
-	wf, err := d.store.Get(req.WorkflowID)
+	run, wf, graph, err := d.prepareRun(req)
 	if err != nil {
-		return nil, storeRunError(err, "workflow not found")
+		return nil, err
+	}
+	useCache := req.UseCache == nil || *req.UseCache
+	d.runs.Add(1)
+	go func() {
+		defer d.runs.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), executionTimeout)
+		defer cancel()
+		d.execute(ctx, run, wf, graph, req.Inputs, useCache, req.TargetNodeID)
+	}()
+
+	return run, nil
+}
+
+// runnableWorkflow is the one answer to "can this workflow be run": it exists,
+// its graph parses, and the graph is a DAG. Every entry point asks it — a
+// single run, a batch of 519 — so a workflow cannot be runnable through one
+// door and refused at another.
+func (d *daemon) runnableWorkflow(id string) (*localstore.Workflow, *engine.Graph, error) {
+	if id == "" {
+		return nil, nil, &runError{http.StatusBadRequest, "workflow_id required"}
+	}
+	wf, err := d.store.Get(id)
+	if err != nil {
+		return nil, nil, storeRunError(err, "workflow not found")
 	}
 	graph, err := engine.ParseGraph(wf.GraphJSON)
 	if err != nil {
-		return nil, &runError{http.StatusBadRequest, "invalid graph: " + err.Error()}
+		return nil, nil, &runError{http.StatusBadRequest, "invalid graph: " + err.Error()}
 	}
 	if _, err := engine.TopoOrder(graph); err != nil {
-		return nil, &runError{http.StatusBadRequest, "graph validation failed: " + err.Error()}
+		return nil, nil, &runError{http.StatusBadRequest, "graph validation failed: " + err.Error()}
+	}
+	return wf, graph, nil
+}
+
+// prepareRun is everything startRun does except starting it: validate the
+// workflow and its graph, then write the queued record. It exists because the
+// batch driver runs its items one after another and has to wait for each —
+// starting a goroutine only to block on it would be a worse way of saying the
+// same thing — and because both paths must agree on what a runnable workflow
+// is. Splitting the validation would be the beginning of two answers.
+func (d *daemon) prepareRun(req runRequest) (*localstore.Run, *localstore.Workflow, *engine.Graph, error) {
+	wf, graph, err := d.runnableWorkflow(req.WorkflowID)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 
 	inputsJSON := "{}"
@@ -599,6 +646,7 @@ func (d *daemon) startRun(req runRequest) (*localstore.Run, error) {
 			WorkflowID:      wf.ID,
 			UserID:          localstore.LocalUserID,
 			WorkflowVersion: wf.Version,
+			BatchID:         req.batchID,
 			Status:          "queued",
 			InputJSON:       inputsJSON,
 			CreatedAt:       time.Now().UTC(),
@@ -606,19 +654,9 @@ func (d *daemon) startRun(req runRequest) (*localstore.Run, error) {
 		Nodes: []localstore.NodeExecution{},
 	}
 	if err := d.store.SaveRun(run); err != nil {
-		return nil, &runError{http.StatusInternalServerError, "failed to create execution"}
+		return nil, nil, nil, &runError{http.StatusInternalServerError, "failed to create execution"}
 	}
-
-	useCache := req.UseCache == nil || *req.UseCache
-	d.runs.Add(1)
-	go func() {
-		defer d.runs.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), executionTimeout)
-		defer cancel()
-		d.execute(ctx, run, wf, graph, req.Inputs, useCache, req.TargetNodeID)
-	}()
-
-	return run, nil
+	return run, wf, graph, nil
 }
 
 // execute runs the graph and persists per-node status as it goes, so a poll of

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -245,4 +246,146 @@ func stripParams(t string) string {
 		t = t[:i]
 	}
 	return strings.ToLower(strings.TrimSpace(t))
+}
+
+// maxListEntries caps one listing. A project folder can contain a
+// node_modules with a few hundred thousand files, and a listing is the first
+// step of a batch: every path returned here is a run someone may be about to
+// pay for. Refusing with the count is more useful than a slice nobody meant to
+// ask for.
+const maxListEntries = 20000
+
+// ErrTooManyFiles is a folder too big to list. Separate from ErrUnsafePath
+// because it is not a refusal about *where* the path points: the caller can act
+// on it by narrowing the folder, which is advice worth giving.
+var ErrTooManyFiles = errors.New("too many files")
+
+// List returns the files under rel, relative to the project root, sorted.
+//
+// Implements engine.DirLister. Files only: a batch loops over files, and a
+// folder in that list would be an item that always fails. Symlinks are
+// followed to decide whether to include the target, never to walk into it —
+// the check is the same one Read and Write use, so a link out of the project
+// is skipped rather than listed, and a link back into it cannot make the walk
+// loop.
+func (f *FileAccess) List(rel string, recursive bool) ([]string, error) {
+	root, err := filepath.EvalSymlinks(f.root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve project folder: %w", err)
+	}
+	abs, clean, err := f.resolveDir(rel, root)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("no such folder in the project folder")
+		}
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%s is a file, not a folder", filepath.Base(abs))
+	}
+
+	out := []string{}
+	add := func(p string) error {
+		if !f.listable(root, p) {
+			return nil
+		}
+		if len(out) >= maxListEntries {
+			return fmt.Errorf("%w: more than %d files under %s; point this at a narrower folder",
+				ErrTooManyFiles, maxListEntries, displayDir(clean))
+		}
+		rp, relErr := filepath.Rel(root, p)
+		if relErr != nil {
+			return nil
+		}
+		out = append(out, filepath.ToSlash(rp))
+		return nil
+	}
+
+	if !recursive {
+		entries, readErr := os.ReadDir(abs)
+		if readErr != nil {
+			return nil, readErr
+		}
+		// os.ReadDir sorts by filename, so the result is already in the order
+		// a person reading the folder would expect.
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			if err := add(filepath.Join(abs, e.Name())); err != nil {
+				return nil, err
+			}
+		}
+		return out, nil
+	}
+
+	walkErr := filepath.WalkDir(abs, func(p string, e os.DirEntry, err error) error {
+		if err != nil {
+			// A directory we cannot read is not a reason to fail the whole
+			// listing: the files we can see are still the files to work on.
+			if e != nil && e.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if e.IsDir() {
+			// .zyvro holds this store itself. Skipping the directory rather
+			// than filtering its files keeps a large run history from being
+			// walked at all.
+			if within(filepath.Join(root, ".zyvro"), p) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		return add(p)
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+	// WalkDir visits lexically, so out is already sorted; sorting again is the
+	// cheap way to be sure of it after the non-recursive branch ever changes.
+	sort.Strings(out)
+	return out, nil
+}
+
+// listable is the same gate Read and Write apply, asked of a path we found
+// rather than of one we were given: inside the project, outside .zyvro, and a
+// regular file once symlinks are followed.
+func (f *FileAccess) listable(root, abs string) bool {
+	if within(filepath.Join(root, ".zyvro"), abs) {
+		return false
+	}
+	resolved, err := resolveExisting(abs)
+	if err != nil || !within(root, resolved) {
+		return false
+	}
+	if within(filepath.Join(root, ".zyvro"), resolved) {
+		return false
+	}
+	info, err := os.Stat(resolved)
+	return err == nil && info.Mode().IsRegular()
+}
+
+// resolveDir is resolve for a folder. The root itself is a legitimate thing to
+// list and resolve refuses it — "." is exactly the path that must never reach
+// Read or Write — so the empty case is handled here instead of loosening the
+// gate every other path goes through.
+func (f *FileAccess) resolveDir(rel, root string) (abs string, clean string, err error) {
+	trimmed := strings.TrimSpace(rel)
+	if trimmed == "" || trimmed == "." || trimmed == "./" {
+		return root, "", nil
+	}
+	return f.resolve(trimmed)
+}
+
+// displayDir names a folder in an error the way the person who typed it would.
+func displayDir(clean string) string {
+	if clean == "" {
+		return "the project folder"
+	}
+	return filepath.ToSlash(clean)
 }

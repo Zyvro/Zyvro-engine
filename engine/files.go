@@ -32,6 +32,28 @@ type DirCreatingWriter interface {
 	WriteWithDirs(rel string, data []byte, createDirs bool) (written string, err error)
 }
 
+// DirLister is the third part of FileAccess, optional like DirCreatingWriter
+// and for the same reason: Read and Write are what a node needs, and listing is
+// what something *above* the graph needs. A run works on one file; deciding
+// which files there are to work on is the caller's question, and it is the only
+// thing standing between "one file in, one file out" and "a folder in, one
+// output each".
+//
+// It returns paths and nothing else — no size, no mode, no directories. A
+// richer entry would be a shape to agree on across a package boundary
+// (localstore cannot import this package: the plugin tests already go the other
+// way round), and nothing yet wants more than the path. Directories are left
+// out because a batch loops over files; a folder in that list would be an item
+// that always fails.
+type DirLister interface {
+	// List returns the files under rel, as paths relative to the project root,
+	// slash-separated and sorted. rel is "" or "." for the root itself. An
+	// implementation must refuse anything that escapes the project, exactly as
+	// Read and Write do — a listing is how a shared workflow would find out
+	// what is on the machine it was opened on.
+	List(rel string, recursive bool) ([]string, error)
+}
+
 // maxFileInputBytes caps what one file node may carry. Everything an input
 // produces travels through the graph as a base64 data URL held in memory, so a
 // 200 MB video would not be a slow node, it would be the end of the process.

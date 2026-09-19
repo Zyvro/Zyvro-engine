@@ -74,17 +74,21 @@ type WorkflowPatch struct {
 
 // Execution mirrors the hosted WorkflowExecution wire shape the frontend polls.
 type Execution struct {
-	ID              string     `json:"id"`
-	WorkflowID      string     `json:"workflow_id"`
-	UserID          string     `json:"user_id"`
-	WorkflowVersion int        `json:"workflow_version"`
-	Status          string     `json:"status"`
-	InputJSON       string     `json:"input_json"`
-	OutputJSON      string     `json:"output_json"`
-	Error           string     `json:"error"`
-	StartedAt       *time.Time `json:"started_at"`
-	FinishedAt      *time.Time `json:"finished_at"`
-	CreatedAt       time.Time  `json:"created_at"`
+	ID              string `json:"id"`
+	WorkflowID      string `json:"workflow_id"`
+	UserID          string `json:"user_id"`
+	WorkflowVersion int    `json:"workflow_version"`
+	Status          string `json:"status"`
+	// BatchID is set when this run is one item of a batch. It is the grouping
+	// key that lets 519 runs show as one line without there being a second
+	// history to keep in step with this one.
+	BatchID    string     `json:"batch_id,omitempty"`
+	InputJSON  string     `json:"input_json"`
+	OutputJSON string     `json:"output_json"`
+	Error      string     `json:"error"`
+	StartedAt  *time.Time `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at"`
+	CreatedAt  time.Time  `json:"created_at"`
 }
 
 // NodeExecution mirrors the hosted per-node record.
@@ -161,7 +165,7 @@ func Open(root string) (*Store, error) {
 		return nil, fmt.Errorf("project path %s is not a directory", abs)
 	}
 	s := &Store{Root: abs}
-	for _, dir := range []string{s.ZyvroDir(), s.workflowsDir(), s.runsDir(), s.MediaDir(), s.PacksDir()} {
+	for _, dir := range []string{s.ZyvroDir(), s.workflowsDir(), s.runsDir(), s.batchesDir(), s.MediaDir(), s.PacksDir()} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, fmt.Errorf("create %s: %w", dir, err)
 		}

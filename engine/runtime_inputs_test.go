@@ -126,3 +126,45 @@ func TestATextWithoutAPlaceholderIsUntouched(t *testing.T) {
 		t.Fatalf("texte = %v", out.Value["text"])
 	}
 }
+
+// GraphUsesInput is what stands between a batch and 519 runs that all read the
+// same file. It has to agree with runtimeValueFor about the three names an
+// input node answers to — a name that works at run time and is refused here
+// would be a batch refused for an input that works.
+func TestGraphUsesInputKnowsEveryWayAnInputReaches(t *testing.T) {
+	byKey := inputNode("n1", "textInput", "user_prompt", "Text Input", nil)
+	byLabel := inputNode("n2", "imageInput", "", "Ref", nil)
+	byID := inputNode("n3", "textInput", "", "Text Input", nil)
+	// A fileInput is not a runtime input node: its path is parameterised with
+	// a placeholder instead, which is the other of the two ways.
+	inPath := GraphNode{ID: "n4", Type: "fileInput", Data: map[string]any{
+		"config": map[string]any{"path": "{{input:gfx}}", "as": "auto"},
+	}}
+	// And a placeholder can sit in a nested setting rather than at the top of
+	// the config, which is why the scan looks at the whole node.
+	nested := GraphNode{ID: "n5", Type: "llm", Data: map[string]any{
+		"config": map[string]any{"options": map[string]any{"system": "work on {{input:deep}}"}},
+	}}
+	g := &Graph{Nodes: []GraphNode{byKey, byLabel, byID, inPath, nested}}
+
+	for _, name := range []string{"user_prompt", "Ref", "n3", "gfx", "deep"} {
+		if !GraphUsesInput(g, name) {
+			t.Errorf("GraphUsesInput(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"", "   ", "sprite", "n9", "user_promp"} {
+		if GraphUsesInput(g, name) {
+			t.Errorf("GraphUsesInput(%q) = true, want false", name)
+		}
+	}
+	if GraphUsesInput(nil, "gfx") {
+		t.Error("GraphUsesInput(nil) = true")
+	}
+
+	// A node that is not a runtime input type does not answer to its own id:
+	// a run started with an input named after it would reach nothing.
+	only := &Graph{Nodes: []GraphNode{{ID: "n4", Type: "fileOutput", Data: map[string]any{"config": map[string]any{}}}}}
+	if GraphUsesInput(only, "n4") {
+		t.Error("a fileOutput answered to its own node id as a run input")
+	}
+}

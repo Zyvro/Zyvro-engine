@@ -173,18 +173,36 @@ func TestMaliciousIDsRejected(t *testing.T) {
 			if err := s.SaveRun(&Run{Execution: Execution{ID: id}}); err == nil {
 				t.Errorf("SaveRun(%q) returned no error", id)
 			}
+			if _, err := s.GetBatch(id); err == nil {
+				t.Errorf("GetBatch(%q) returned no error", id)
+			}
+			if err := s.SaveBatch(&Batch{ID: id}); err == nil {
+				t.Errorf("SaveBatch(%q) returned no error", id)
+			}
 		})
 	}
 
-	// Nothing was written: the workflows and runs directories are still empty,
-	// and no stray file landed next to the project root.
-	for _, dir := range []string{filepath.Join(s.ZyvroDir(), "workflows"), filepath.Join(s.ZyvroDir(), "runs")} {
+	// Nothing was written: none of the directories an id turns into a filename
+	// under holds a file, and no stray file landed next to the project root.
+	// Files, not entries: runs/ has a batches/ directory inside it, which is
+	// checked here in its own right rather than counted as a stray.
+	for _, dir := range []string{
+		filepath.Join(s.ZyvroDir(), "workflows"),
+		filepath.Join(s.ZyvroDir(), "runs"),
+		filepath.Join(s.ZyvroDir(), "runs", "batches"),
+	} {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			t.Fatalf("ReadDir %s: %v", dir, err)
 		}
-		if len(entries) != 0 {
-			t.Errorf("%s is not empty: %v", dir, names(entries))
+		var files []os.DirEntry
+		for _, e := range entries {
+			if !e.IsDir() {
+				files = append(files, e)
+			}
+		}
+		if len(files) != 0 {
+			t.Errorf("%s gained files: %v", dir, names(files))
 		}
 	}
 	rootEntries, _ := os.ReadDir(s.Root)
