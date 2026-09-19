@@ -41,6 +41,11 @@ type Secret struct {
 	Provider    string    `json:"provider"`
 	SecretLast4 string    `json:"secret_last4"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	// Scope says where this credential is kept: "machine" for the one shared by
+	// every project, "project" for one that only this folder has. Shown rather
+	// than inferred, because the only thing worse than configuring a key twice
+	// is not knowing which of the two is the one being used.
+	Scope string `json:"scope,omitempty"`
 }
 
 // storedSecret is the on-disk entry, value included.

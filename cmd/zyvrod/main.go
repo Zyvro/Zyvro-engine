@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -157,6 +158,12 @@ type daemon struct {
 	plugins *plugins.Registry
 	packs   []packInfo
 
+	// machine is the configuration that belongs to the person rather than to
+	// this project: credentials and server addresses, shared by every folder
+	// they open. Nil when the home directory could not be prepared, which is
+	// not fatal — a project still works with what a project already had.
+	machine *localstore.Machine
+
 	// batchMu guards batchStop, which holds the cancel of every batch this
 	// process is driving. A batch is the one thing here that can run for hours,
 	// so it is the one thing that has to be stoppable by name.
@@ -174,12 +181,64 @@ func newDaemon(store *localstore.Store) (*daemon, error) {
 		env:   providers.FromEnv(),
 		token: token,
 	}
+	// Ouvert ici plutôt qu'à la première lecture : si le dossier de
+	// configuration est impossible à créer, on veut le savoir dans le journal
+	// de démarrage, à côté du projet pour lequel il a manqué — pas au moment où
+	// quelqu'un enregistre une clef.
+	machine, err := localstore.OpenMachine()
+	if err != nil {
+		log.Printf("machine configuration unavailable (%v): keys and addresses will only be kept for this project", err)
+	} else {
+		d.machine = machine
+	}
 	// Packs are read once here rather than lazily on the first run: the palette
 	// asks for the node catalogue before anything is ever executed, and a pack
 	// that is going to be refused should say so in the startup log, next to the
 	// project it was refused for.
 	d.loadPacks()
 	return d, nil
+}
+
+// mergedSecrets and mergedEndpoints answer the same question in one place: what
+// does this project actually use for this provider?
+//
+// La règle est en une phrase — **la machine gagne, le projet sert de repli** —
+// et les deux moitiés comptent. « La machine gagne » est ce qui fait que régler
+// une clef une fois suffit ensuite dans tous les dossiers, ce qui était toute
+// la demande. Le repli est ce qui fait que rien ne casse en chemin : un projet
+// réglé avant ce changement garde ses clefs et continue de tourner, sans
+// migration, sans rien à déplacer.
+func (d *daemon) mergedSecrets() map[string]string {
+	out := map[string]string{}
+	if v, err := d.store.SecretValues(); err == nil {
+		for provider, value := range v {
+			out[provider] = value
+		}
+	}
+	for provider, value := range d.machine.SecretValues() {
+		out[provider] = value
+	}
+	return out
+}
+
+func (d *daemon) mergedEndpoints() map[string]localstore.Endpoint {
+	out := map[string]localstore.Endpoint{}
+	for id, e := range d.store.ProviderEndpoints() {
+		out[id] = e
+	}
+	for id, e := range d.machine.Endpoints() {
+		out[id] = e
+	}
+	return out
+}
+
+// secretScope says where the credential in use is kept, for a panel that has to
+// tell somebody why the key they see is not the one they typed here.
+func (d *daemon) secretScope(provider string) string {
+	if d.machine.SecretValues()[provider] != "" {
+		return "machine"
+	}
+	return "project"
 }
 
 // providerConfig builds the configuration for one run or one catalog listing.
@@ -192,7 +251,8 @@ func newDaemon(store *localstore.Store) (*daemon, error) {
 func (d *daemon) providerConfig() *providers.Config {
 	cfg := *d.env // copy: the launch configuration is never mutated
 
-	if secrets, err := d.store.SecretValues(); err == nil {
+	{
+		secrets := d.mergedSecrets()
 		for provider, value := range secrets {
 			// `bfl` manquait ici, et c'est le genre d'oubli que cette forme
 			// invite : une clé Black Forest Labs se stockait, le panneau
@@ -234,8 +294,11 @@ func (d *daemon) providerConfig() *providers.Config {
 	// The order the project chose, and the servers it talks to. Both were being
 	// saved and neither was reaching the engine: the panel showed a list runs
 	// did not follow.
+	// L'ordre reste au projet : celui-là décrit bien le projet — celui qui coûte
+	// cher passe par le fournisseur prudent, celui où l'on bricole par le moins
+	// cher — et il ne coûte rien à réécrire puisqu'il ne se retient pas.
 	cfg.Preference = providers.Preference(d.store.ProviderOrder())
-	if stored := d.store.ProviderEndpoints(); len(stored) > 0 {
+	if stored := d.mergedEndpoints(); len(stored) > 0 {
 		cfg.Endpoints = map[string]providers.Endpoint{}
 		for id, e := range stored {
 			cfg.Endpoints[id] = providers.Endpoint{URL: e.URL, Key: e.Key, Model: e.Model}
@@ -982,10 +1045,7 @@ type providerInfo struct {
 // installed and signed in.
 func (d *daemon) localCatalog() []providerInfo {
 	cfg := d.providerConfig()
-	stored := map[string]string{}
-	if v, err := d.store.SecretValues(); err == nil {
-		stored = v
-	}
+	stored := d.mergedSecrets()
 
 	catalog := []providerInfo{
 		{
@@ -1222,6 +1282,9 @@ func (d *daemon) listProviders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"providers": d.localCatalog(),
 		"order":     d.store.ProviderOrder(),
+		// Où les clefs et les adresses sont rangées, pour que le panneau puisse
+		// le dire plutôt que de laisser croire qu'elles vivent dans le projet.
+		"machine_dir": d.machine.Dir(),
 	})
 }
 
@@ -1336,7 +1399,7 @@ func (d *daemon) setProviderEndpoint(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	current := d.store.ProviderEndpoints()[id]
+	current := d.mergedEndpoints()[id]
 	url := strings.TrimSpace(current.URL)
 	if req.URL != nil {
 		url = strings.TrimSpace(*req.URL)
@@ -1357,13 +1420,25 @@ func (d *daemon) setProviderEndpoint(w http.ResponseWriter, r *http.Request) {
 	if req.Model != nil {
 		model = strings.TrimSpace(*req.Model)
 	}
-	if err := d.store.SetProviderEndpoint(id, localstore.Endpoint{
-		URL:   url,
-		Key:   key,
-		Model: model,
-	}); err != nil {
-		writeErr(w, http.StatusInternalServerError, "failed to save the endpoint")
-		return
+	// Dans la machine, comme les clefs : l'adresse d'un LM Studio décrit
+	// l'ordinateur sur lequel il tourne, pas le dossier qu'on y a ouvert.
+	saved := localstore.Endpoint{URL: url, Key: key, Model: model}
+	clearing := url == "" && key == "" && model == ""
+	if err := d.machine.SetEndpoint(id, saved); err != nil {
+		// Sans dossier de configuration, le projet reste le seul endroit
+		// possible : mieux vaut une adresse rangée là que pas d'adresse.
+		if err := d.store.SetProviderEndpoint(id, saved); err != nil {
+			writeErr(w, http.StatusInternalServerError, "failed to save the endpoint")
+			return
+		}
+	} else if clearing {
+		// « Éteins-le » vaut pour les deux, comme pour une clef supprimée :
+		// n'effacer que celle de la machine ferait reparaître celle du projet,
+		// et le fournisseur aurait l'air toujours branché juste après avoir été
+		// débranché. Une adresse enregistrée, elle, ne touche pas au projet :
+		// la machine gagne, donc l'ancienne entrée est inerte et la détruire
+		// serait une écriture pour rien.
+		_ = d.store.SetProviderEndpoint(id, localstore.Endpoint{})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"providers": d.localCatalog()})
 }
@@ -1403,13 +1478,34 @@ func (d *daemon) knownProvider(id string) bool {
 
 // ---------- secrets ----------
 
+// listSecrets rend les deux endroits en une liste, chacune marquée du sien.
+//
+// Une seule liste, parce qu'il n'y a qu'une seule question — quelle clef ce
+// projet utilise-t-il pour ce fournisseur — et que deux listes à comparer
+// seraient exactement la corvée qu'on vient de supprimer. La portée est là pour
+// le cas qui reste : une clef de projet écrite avant ce changement, que celle
+// de la machine masque maintenant.
 func (d *daemon) listSecrets(w http.ResponseWriter, r *http.Request) {
-	secrets, err := d.store.ListSecrets()
+	project, err := d.store.ListSecrets()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "failed to read secrets")
 		return
 	}
-	writeJSON(w, http.StatusOK, secrets)
+	byProvider := map[string]localstore.Secret{}
+	for _, sec := range project {
+		sec.Scope = "project"
+		byProvider[sec.Provider] = sec
+	}
+	for _, sec := range d.machine.ListSecrets() {
+		sec.Scope = "machine"
+		byProvider[sec.Provider] = sec
+	}
+	out := make([]localstore.Secret, 0, len(byProvider))
+	for _, sec := range byProvider {
+		out = append(out, sec)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Provider < out[j].Provider })
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (d *daemon) setSecret(w http.ResponseWriter, r *http.Request) {
@@ -1429,7 +1525,20 @@ func (d *daemon) setSecret(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "the local CLI providers are configured by installing them, not by storing a key")
 		return
 	}
-	secret, err := d.store.SetSecret(provider, req.Secret)
+	// Dans la configuration de la machine, pas dans le projet. C'est le
+	// changement que Jeremy a demandé en une phrase — « à chaque projet je dois
+	// configurer les providers » — et il tient tout entier dans cette ligne :
+	// une clef décrit la personne, pas le dossier qu'elle a ouvert.
+	//
+	// Le projet reste possible : une clef qui y est déjà continue d'être lue en
+	// repli. Simplement, on n'en crée plus.
+	secret, err := d.machine.SetSecret(provider, req.Secret)
+	if err != nil {
+		// Sans dossier de configuration — un home en lecture seule, un compte
+		// de service — le projet reste le seul endroit possible. Mieux vaut une
+		// clef rangée là que pas de clef du tout.
+		secret, err = d.store.SetSecret(provider, req.Secret)
+	}
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -1438,11 +1547,19 @@ func (d *daemon) setSecret(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"provider":     secret.Provider,
 		"secret_last4": secret.SecretLast4,
+		"scope":        d.secretScope(provider),
 	})
 }
 
 func (d *daemon) deleteSecret(w http.ResponseWriter, r *http.Request) {
 	provider := strings.ToLower(strings.TrimSpace(r.PathValue("provider")))
+	// Les deux endroits, et c'est la seule lecture honnête de « supprime ».
+	// N'effacer que celle de la machine ferait réapparaître celle du projet,
+	// et quelqu'un qui vient de supprimer une clef la reverrait à l'écran.
+	if err := d.machine.DeleteSecret(provider); err != nil {
+		writeErr(w, http.StatusBadRequest, "unknown provider")
+		return
+	}
 	if err := d.store.DeleteSecret(provider); err != nil {
 		writeErr(w, http.StatusBadRequest, "unknown provider")
 		return

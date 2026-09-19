@@ -37,6 +37,14 @@ type testEnv struct {
 
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
+	// Une configuration de machine par test.
+	//
+	// Le TestMain en garde une pour tout le paquet, ce qui protège la vraie
+	// configuration de qui lance `go test` ; celle-ci protège les tests les uns
+	// des autres. Sans elle, une clef enregistrée par un test serait là au
+	// suivant — ce qui est exactement la propriété qu'on vient d'écrire, et
+	// exactement ce qu'un test ne doit pas hériter du voisin.
+	t.Setenv(localstore.MachineDirEnv, t.TempDir())
 	store, err := localstore.Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -343,18 +351,37 @@ func TestSecretsRejectUnknownProviders(t *testing.T) {
 	}
 }
 
-// The secrets file is plaintext by design, which makes its permissions and the
-// gitignore the two things that stop a key leaking.
-func TestSecretsFileIsPrivateAndIgnored(t *testing.T) {
+// Une clef enregistrée va dans la configuration de la machine, pas dans le
+// projet — c'est la demande de Jeremy, « à chaque projet je dois configurer les
+// providers », et c'est ici qu'elle se vérifie plutôt que dans une phrase.
+//
+// Le fichier reste en clair par choix assumé, donc ses permissions restent la
+// chose qui empêche une clef de fuir vers un autre compte de la machine. Et le
+// projet garde son `.gitignore` : une clef qui y est déjà — écrite avant ce
+// changement — ne doit pas se retrouver dans un dépôt pour autant.
+func TestAKeyIsStoredForTheMachineAndKeptPrivate(t *testing.T) {
 	e := newTestEnv(t)
 	mustStatus(t, e.do(http.MethodPut, "/api/secrets", map[string]any{"provider": "openai", "secret": "sk-test-1234"}), http.StatusOK)
 
-	info, err := os.Stat(filepath.Join(e.store.ZyvroDir(), "secrets.json"))
+	// Pas dans le projet : c'est tout l'objet du changement.
+	if _, err := os.Stat(filepath.Join(e.store.ZyvroDir(), "secrets.json")); err == nil {
+		t.Error("la clef a été écrite dans le projet, donc elle sera à retaper au dossier suivant")
+	}
+
+	machine := filepath.Join(e.daemon.machine.Dir(), "providers.json")
+	info, err := os.Stat(machine)
 	if err != nil {
-		t.Fatalf("secrets.json missing: %v", err)
+		t.Fatalf("machine providers.json missing: %v", err)
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("secrets.json mode = %o, want 600", perm)
+		t.Errorf("machine providers.json mode = %o, want 600", perm)
+	}
+	body, err := os.ReadFile(machine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "sk-test-1234") {
+		t.Errorf("la clef n'est pas dans le fichier de la machine:\n%s", body)
 	}
 
 	ignore, err := os.ReadFile(filepath.Join(e.store.ZyvroDir(), ".gitignore"))
