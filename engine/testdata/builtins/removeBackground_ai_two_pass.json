@@ -3,24 +3,24 @@
     "A": {
       "type": "image",
       "value": {
-        "bytes": 104,
-        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAL0lEQVR4nGL5//8/AymACcYYPBpYYAwQvKupCWOiAOXr18m3YVQDMRoYh0FaAgwANRoJHqVRR4AAAAAASUVORK5CYII=",
+        "bytes": 103,
+        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAALklEQVR4nGL5//8/AymAiSTVdNHAgsy5q6mJVZHy9et0dNKI1MA4DNISIAAA//81Ggkewj10RAAAAABJRU5ErkJggg==",
         "mimeType": "image/png"
       }
     },
     "B": {
       "type": "image",
       "value": {
-        "bytes": 103,
-        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAALklEQVR4nGJioBAMAwNYYAwYuKOh8R/GxgZUbtxgpKoLRg0YDAYwDLgLBt4AwAD5NQQhOzOsPwAAAABJRU5ErkJggg==",
+        "bytes": 105,
+        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMElEQVR4nGJioBAMAwNY0AXuaGj8x6dB5cYNRqq6YNSAwWAAxWDgvUCxAYAAAAD///k1BCG6phPZAAAAAElFTkSuQmCC",
         "mimeType": "image/png",
         "url": "https://media.test/exec-fixed/B/transparent.png"
       }
     }
   },
   "media": [
-    "exec-fixed/B/pass-white.png (image/png, 104 bytes)",
-    "exec-fixed/B/pass-black.png (image/png, 100 bytes)",
-    "exec-fixed/B/transparent.png (image/png, 103 bytes)"
+    "exec-fixed/B/pass-white.png (image/png, 103 bytes)",
+    "exec-fixed/B/pass-black.png (image/png, 98 bytes)",
+    "exec-fixed/B/transparent.png (image/png, 105 bytes)"
   ]
 }

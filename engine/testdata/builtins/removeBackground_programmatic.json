@@ -3,8 +3,8 @@
     "A": {
       "type": "image",
       "value": {
-        "bytes": 104,
-        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAL0lEQVR4nGL5//8/AymACcYYPBpYYAwQvKupCWOiAOXr18m3YVQDMRoYh0FaAgwANRoJHqVRR4AAAAAASUVORK5CYII=",
+        "bytes": 103,
+        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAALklEQVR4nGL5//8/AymAiSTVdNHAgsy5q6mJVZHy9et0dNKI1MA4DNISIAAA//81Ggkewj10RAAAAABJRU5ErkJggg==",
         "mimeType": "image/png"
       }
     },
@@ -12,7 +12,7 @@
       "type": "image",
       "value": {
         "bytes": 108,
-        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAM0lEQVR4nGL5//8/AyWACcYYugawwBgwcFdTE2+gKF+/zkhVF4waMBgMYBzheQGUFwADACR5Ch7I8SBDAAAAAElFTkSuQmCC",
+        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAM0lEQVR4nGL5//8/AyWAiSLdg8IAFnSBu5qaeANF+fp1Rqq6YNSAwWAA42heYAAEAAD//yR5Ch6cPRvMAAAAAElFTkSuQmCC",
         "mimeType": "image/png",
         "url": "https://media.test/exec-fixed/B/transparent.png"
       }

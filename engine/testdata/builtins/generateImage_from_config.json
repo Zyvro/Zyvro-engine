@@ -3,8 +3,8 @@
     "A": {
       "type": "image",
       "value": {
-        "bytes": 98,
-        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAKUlEQVR4nGLRCLjDgA0wwRjogIUBDLbc8IGJMPhobMGng3QJRpJdBRgA6+gFvEiIZs4AAAAASUVORK5CYII=",
+        "bytes": 101,
+        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAALElEQVR4nGLRCLjDgA0wYRVlYGBggVBbbvjAhXw0tuDTQboEI8muAgQAAP//6+gFvO5NQTYAAAAASUVORK5CYII=",
         "mimeType": "image/png",
         "url": "https://media.test/exec-fixed/A/image.png"
       }
@@ -12,14 +12,14 @@
     "B": {
       "type": "image",
       "value": {
-        "bytes": 98,
-        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAKUlEQVR4nGLRCLjDgA0wwRjogIUBDLbc8IGJMPhobMGng3QJRpJdBRgA6+gFvEiIZs4AAAAASUVORK5CYII=",
+        "bytes": 101,
+        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAALElEQVR4nGLRCLjDgA0wYRVlYGBggVBbbvjAhXw0tuDTQboEI8muAgQAAP//6+gFvO5NQTYAAAAASUVORK5CYII=",
         "mimeType": "image/png",
         "url": "https://media.test/exec-fixed/A/image.png"
       }
     }
   },
   "media": [
-    "exec-fixed/A/image.png (image/png, 98 bytes)"
+    "exec-fixed/A/image.png (image/png, 101 bytes)"
   ]
 }
