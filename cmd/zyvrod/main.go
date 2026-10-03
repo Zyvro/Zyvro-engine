@@ -1147,6 +1147,14 @@ func (d *daemon) localCatalog() []providerInfo {
 			SetupHint:  "Start LM Studio's local server, then pick a model. It speaks the same API as OpenAI, so everything here works the same way.",
 		},
 		{
+			ID:         providers.MimoProvider,
+			Label:      "Xiaomi MiMo",
+			Purpose:    "Text generation and the Brain agent on MiMo models, and the MiMo agent harness (Codex pointed at MiMo).",
+			KeyHint:    "sk-… (pay-as-you-go) or tp-… / ttp-… (Token Plan)",
+			ConsoleURL: "https://platform.xiaomimimo.com/#/console/api-keys",
+			SetupHint:  "Paste a MiMo API key. Pay-as-you-go keys use the default address; for a Token Plan key, set the address to https://token-plan-cn.xiaomimimo.com/v1.",
+		},
+		{
 			ID:        providers.CustomProvider,
 			Label:     "Custom endpoint",
 			Purpose:   "Text generation, vision and code completion on any server speaking the OpenAI API — llama.cpp, vLLM, LocalAI, a box on your network.",
@@ -1267,7 +1275,11 @@ func effectiveCredential(cfg *providers.Config, id string) string {
 	if isEndpointProvider(id) {
 		// An address is the credential. Ollama on this machine and LM Studio
 		// are configured the moment they are running, which is why they count
-		// as usable without anybody pasting anything.
+		// as usable without anybody pasting anything. A hosted one is not: MiMo
+		// with an address and no key is a 401, not a provider.
+		if !cfg.EndpointConfigured(id) {
+			return ""
+		}
 		return cfg.EndpointFor(id).URL
 	}
 	return ""

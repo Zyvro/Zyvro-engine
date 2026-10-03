@@ -51,6 +51,12 @@ func TestTheLocalEndpointsAreOfferedForTextAndVision(t *testing.T) {
 			// covered" lie the vision split was fixed to stop telling.
 			want = "image"
 		}
+		if id == providers.MimoProvider {
+			// A hosted service on the same API, offered for what has been
+			// checked: text. Vision and completion would be a promise nobody
+			// verified.
+			want = "text"
+		}
 		if strings.Join(p.Roles, ",") != want {
 			t.Errorf("%s roles: %v", id, p.Roles)
 		}

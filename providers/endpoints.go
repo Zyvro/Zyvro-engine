@@ -43,7 +43,27 @@ const (
 	LMStudioProvider    = "lmstudio"
 	CustomProvider      = "custom"
 	CustomImageProvider = "custom-image"
+	// MimoProvider is Xiaomi MiMo's hosted API. It speaks the same chat API as
+	// the three above, so it is served by the same call, but it is a service
+	// with an account rather than a server on this machine: it needs a key, and
+	// it lives at a known address — the pay-as-you-go one by default, the Token
+	// Plan one (https://token-plan-cn.xiaomimimo.com/v1) when the person pastes
+	// it instead.
+	MimoProvider = "mimo"
 )
+
+// MimoDefaultModel is what MiMo answers with when nobody picked a model, and
+// MimoModels what the picker offers when its /models route does not answer:
+// the documented model, and its million-token variant.
+const MimoDefaultModel = "mimo-v2.6-pro"
+
+var MimoModels = []string{"mimo-v2.6-pro", "mimo-v2.6-pro[1m]"}
+
+// HostedEndpointProviders are the address-configured providers that are a
+// service rather than a server: the same API and the same settings, but text
+// only — nobody has checked their vision or completion behaviour, and offering
+// a job that answers with an error is worse than not offering it.
+var HostedEndpointProviders = []string{MimoProvider}
 
 // OpenAICompatibleProviders are the ones this file serves. They do both text
 // and vision, because the endpoint does: the same /v1/chat/completions takes a
@@ -60,7 +80,7 @@ var ImageEndpointProviders = []string{CustomImageProvider}
 // than by a key, whichever job it does. The catalogue and the settings route
 // ask this rather than keeping their own idea of which providers have a URL.
 var AddressConfiguredProviders = append(
-	append([]string{}, OpenAICompatibleProviders...),
+	append(append([]string{}, OpenAICompatibleProviders...), HostedEndpointProviders...),
 	ImageEndpointProviders...,
 )
 
@@ -76,6 +96,8 @@ func DefaultEndpointURL(provider string) string {
 		return "http://127.0.0.1:11434/v1"
 	case LMStudioProvider:
 		return "http://127.0.0.1:1234/v1"
+	case MimoProvider:
+		return "https://api.xiaomimimo.com/v1"
 	}
 	return ""
 }
@@ -95,6 +117,9 @@ func (c *Config) endpointFor(provider string) Endpoint {
 	}
 	if strings.TrimSpace(e.URL) == "" {
 		e.URL = DefaultEndpointURL(provider)
+	}
+	if provider == MimoProvider && strings.TrimSpace(e.Model) == "" {
+		e.Model = MimoDefaultModel
 	}
 	e.URL = strings.TrimSuffix(strings.TrimSpace(e.URL), "/")
 	return e
@@ -116,9 +141,25 @@ func isOpenAICompatible(provider string) bool {
 }
 
 // EndpointConfigured reports whether a provider has somewhere to talk to. For
-// these, that is the whole of being configured: there is no key to check.
+// these, that is the whole of being configured: there is no key to check —
+// except for a hosted one, where an address without a key is a 401 waiting.
 func (c *Config) EndpointConfigured(provider string) bool {
-	return strings.TrimSpace(c.endpointFor(provider).URL) != ""
+	e := c.endpointFor(provider)
+	if isHostedEndpoint(provider) && strings.TrimSpace(e.Key) == "" {
+		return false
+	}
+	return strings.TrimSpace(e.URL) != ""
+}
+
+// isHostedEndpoint says whether a provider is an address-configured service
+// that needs a key.
+func isHostedEndpoint(provider string) bool {
+	for _, p := range HostedEndpointProviders {
+		if p == provider {
+			return true
+		}
+	}
+	return false
 }
 
 // openAICompatibleComplete is the text half. It reuses the request and response
@@ -166,10 +207,22 @@ func (c *Config) ModelList(ctx context.Context, provider string) ([]string, erro
 		return nil, fmt.Errorf("%s has no address configured", provider)
 	}
 	raw, err := getJSON(ctx, e.URL+"/models", e.Key)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		var list []string
+		if list, err = parseModelList(raw, e.URL); err == nil && (provider != MimoProvider || len(list) > 0) {
+			return list, nil
+		}
 	}
-	return parseModelList(raw, e.URL)
+	// MiMo's documentation names its models but not its /models route. When
+	// that route is missing or answers with something else, its documented
+	// list beats an empty picker — but a refused key is still said, because
+	// a list of models over a key that does not work is a promise that fails
+	// at the first run.
+	var refused *ProviderError
+	if provider == MimoProvider && strings.TrimSpace(e.Key) != "" && !(errors.As(err, &refused) && refused.Code == "auth_error") {
+		return append([]string{}, MimoModels...), nil
+	}
+	return nil, err
 }
 
 // parseModelList sépare « ce serveur n'a rien de chargé » de « ce n'est pas un

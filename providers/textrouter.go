@@ -15,7 +15,7 @@ import (
 var TextProviders = []string{
 	"ollama", "anthropic", "openai",
 	claudeCLIProvider, codexCLIProvider, qwenCLIProvider,
-	OllamaLocalProvider, LMStudioProvider, CustomProvider,
+	OllamaLocalProvider, LMStudioProvider, CustomProvider, MimoProvider,
 }
 
 // LocalOnlyProviders are the ones that only work where the engine runs on the
@@ -106,6 +106,8 @@ func (c *Config) resolveTextProvider(requested string) string {
 			return LMStudioProvider
 		case CustomProvider:
 			return CustomProvider
+		case MimoProvider:
+			return MimoProvider
 		}
 	}
 	return c.PreferredOrDefault("text", func(p string) bool {
@@ -133,6 +135,12 @@ func (c *Config) TextCredentialFor(provider string) string {
 		// There is no secret. Having an address is the whole of being
 		// configured, and callers only ever test this for emptiness.
 		return c.endpointFor(strings.ToLower(strings.TrimSpace(provider))).URL
+	case MimoProvider:
+		// A hosted service: no key, not configured.
+		if !c.EndpointConfigured(MimoProvider) {
+			return ""
+		}
+		return c.endpointFor(MimoProvider).URL
 	}
 	return ""
 }
@@ -152,7 +160,7 @@ func (c *Config) LLMComplete(ctx context.Context, req LLMRequest) (*LLMResponse,
 		return c.openAIComplete(ctx, req)
 	case claudeCLIProvider, codexCLIProvider, qwenCLIProvider:
 		return c.localCLIComplete(ctx, req, p)
-	case OllamaLocalProvider, LMStudioProvider, CustomProvider:
+	case OllamaLocalProvider, LMStudioProvider, CustomProvider, MimoProvider:
 		return c.openAICompatibleComplete(ctx, p, req)
 	default:
 		return c.ollamaComplete(ctx, req)
@@ -179,6 +187,11 @@ func (c *Config) TextCredential(provider string) string {
 			return ""
 		}
 		return path
+	case OllamaLocalProvider, LMStudioProvider, CustomProvider, MimoProvider:
+		// The same answer TextCredentialFor gives: the address, or nothing when
+		// the provider is not usable. Falling through to the Ollama key told
+		// somebody pointed at a server that they were missing a key for another.
+		return c.TextCredentialFor(p)
 	default:
 		return c.OllamaAPIKey
 	}
@@ -198,6 +211,8 @@ func (c *Config) TextModel(provider string) string {
 		return c.CodexCLIModel
 	case qwenCLIProvider:
 		return c.QwenCLIModel
+	case OllamaLocalProvider, LMStudioProvider, CustomProvider, MimoProvider:
+		return c.endpointFor(c.resolveTextProvider(provider)).Model
 	default:
 		return c.OllamaModel
 	}
