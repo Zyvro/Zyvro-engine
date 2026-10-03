@@ -301,6 +301,8 @@ func (d *daemon) providerConfig() *providers.Config {
 				cfg.CodexCLIPath = value
 			case "qwen-cli":
 				cfg.QwenCLIPath = value
+			case "mimo-cli":
+				cfg.MimoCLIPath = value
 			}
 		}
 	}
@@ -1133,6 +1135,13 @@ func (d *daemon) localCatalog() []providerInfo {
 			SetupHint:  "Install Qwen Code so `qwen` is on your PATH. It runs on its own login by default, or against your Ollama or LM Studio through QWEN_CLI_ENDPOINT.",
 		},
 		{
+			ID:         "mimo-cli",
+			Label:      "MiMo Code (local CLI)",
+			Purpose:    "Text generation through the mimo binary already signed in to your Xiaomi MiMo account on this machine.",
+			ConsoleURL: "https://mimo.xiaomi.com/mimocode",
+			SetupHint:  "Install MiMo Code with `curl -fsSL https://mimo.xiaomi.com/install | bash`, then sign in with `mimo providers login`. Your MiMo account authenticates it; no key is stored here.",
+		},
+		{
 			ID:         providers.OllamaLocalProvider,
 			Label:      "Ollama (this machine)",
 			Purpose:    "Text generation, vision and code completion, on the models you have pulled locally.",
@@ -1267,7 +1276,7 @@ func effectiveCredential(cfg *providers.Config, id string) string {
 		return cfg.OpenAIAPIKey
 	case "ollama":
 		return cfg.OllamaAPIKey
-	case "claude-cli", "codex-cli", "qwen-cli":
+	case "claude-cli", "codex-cli", "qwen-cli", "mimo-cli":
 		// TextCredential resolves the CLI to its binary path, and returns ""
 		// when it is not installed, which is exactly "not configured" here.
 		return cfg.TextCredential(id)

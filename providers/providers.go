@@ -102,11 +102,17 @@ type Config struct {
 	ClaudeCLIPath string
 	CodexCLIPath  string
 	QwenCLIPath   string
+	// MimoCLIPath is Xiaomi's MiMo Code. Its installer puts it in
+	// ~/.mimocode/bin and adds that to PATH from .zshrc only, so a process that
+	// did not start from an interactive shell may not see it; localCLIBinary
+	// falls back to that folder.
+	MimoCLIPath string
 	// ClaudeCLIModel and CodexCLIModel are empty by default, which lets the CLI
 	// keep whatever model the subscription already chose for it.
 	ClaudeCLIModel string
 	CodexCLIModel  string
 	QwenCLIModel   string
+	MimoCLIModel   string
 	// QwenCLIEndpoint names which provider Qwen Code runs against — one of the
 	// OpenAI-compatible endpoints this config already holds. Empty leaves it on
 	// its own login, which is what installing and signing in means.
@@ -162,11 +168,13 @@ func FromEnv() *Config {
 		ClaudeCLIPath: getEnv("CLAUDE_CLI_PATH", "claude"),
 		CodexCLIPath:  getEnv("CODEX_CLI_PATH", "codex"),
 		QwenCLIPath:   getEnv("QWEN_CLI_PATH", "qwen"),
+		MimoCLIPath:   getEnv("MIMO_CLI_PATH", "mimo"),
 		// Deliberately unset: an empty model means "let the CLI choose", which is
 		// the only correct answer for a subscription the user configured itself.
 		ClaudeCLIModel:  os.Getenv("CLAUDE_CLI_MODEL"),
 		CodexCLIModel:   os.Getenv("CODEX_CLI_MODEL"),
 		QwenCLIModel:    os.Getenv("QWEN_CLI_MODEL"),
+		MimoCLIModel:    os.Getenv("MIMO_CLI_MODEL"),
 		QwenCLIEndpoint: os.Getenv("QWEN_CLI_ENDPOINT"),
 		LocalCLIWorkdir: os.Getenv("LOCAL_CLI_WORKDIR"),
 

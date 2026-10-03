@@ -14,7 +14,7 @@ import (
 // TextProviders is the set of providers that can back a text node or the Brain.
 var TextProviders = []string{
 	"ollama", "anthropic", "openai",
-	claudeCLIProvider, codexCLIProvider, qwenCLIProvider,
+	claudeCLIProvider, codexCLIProvider, qwenCLIProvider, mimoCLIProvider,
 	OllamaLocalProvider, LMStudioProvider, CustomProvider, MimoProvider,
 }
 
@@ -32,7 +32,7 @@ var TextProviders = []string{
 // handing it a way to probe the inside of our own network. They belong to the
 // machine the person is sitting at.
 var LocalOnlyProviders = append(
-	[]string{claudeCLIProvider, codexCLIProvider, qwenCLIProvider},
+	[]string{claudeCLIProvider, codexCLIProvider, qwenCLIProvider, mimoCLIProvider},
 	AddressConfiguredProviders...,
 )
 
@@ -40,7 +40,7 @@ var LocalOnlyProviders = append(
 // drives as a subprocess. Asked here rather than listed by each caller: the
 // daemon's catalogue had its own copy of this answer.
 func IsCLIProvider(provider string) bool {
-	return provider == claudeCLIProvider || provider == codexCLIProvider || provider == qwenCLIProvider
+	return provider == claudeCLIProvider || provider == codexCLIProvider || provider == qwenCLIProvider || provider == mimoCLIProvider
 }
 
 // HostedTextProviders is TextProviders minus the ones that need a local
@@ -100,6 +100,8 @@ func (c *Config) resolveTextProvider(requested string) string {
 			return codexCLIProvider
 		case qwenCLIProvider:
 			return qwenCLIProvider
+		case mimoCLIProvider:
+			return mimoCLIProvider
 		case OllamaLocalProvider:
 			return OllamaLocalProvider
 		case LMStudioProvider:
@@ -125,7 +127,7 @@ func (c *Config) TextCredentialFor(provider string) string {
 		return c.OpenAIAPIKey
 	case "ollama":
 		return c.OllamaAPIKey
-	case claudeCLIProvider, codexCLIProvider, qwenCLIProvider:
+	case claudeCLIProvider, codexCLIProvider, qwenCLIProvider, mimoCLIProvider:
 		bin, _ := c.localCLIBinary(strings.ToLower(strings.TrimSpace(provider)))
 		if path, err := exec.LookPath(bin); err == nil {
 			return path
@@ -158,7 +160,7 @@ func (c *Config) LLMComplete(ctx context.Context, req LLMRequest) (*LLMResponse,
 		return c.anthropicComplete(ctx, req)
 	case "openai":
 		return c.openAIComplete(ctx, req)
-	case claudeCLIProvider, codexCLIProvider, qwenCLIProvider:
+	case claudeCLIProvider, codexCLIProvider, qwenCLIProvider, mimoCLIProvider:
 		return c.localCLIComplete(ctx, req, p)
 	case OllamaLocalProvider, LMStudioProvider, CustomProvider, MimoProvider:
 		return c.openAICompatibleComplete(ctx, p, req)
@@ -175,7 +177,7 @@ func (c *Config) TextCredential(provider string) string {
 		return c.AnthropicAPIKey
 	case "openai":
 		return c.OpenAIAPIKey
-	case claudeCLIProvider, codexCLIProvider, qwenCLIProvider:
+	case claudeCLIProvider, codexCLIProvider, qwenCLIProvider, mimoCLIProvider:
 		// A CLI provider has no secret to hand back: the subscription lives in
 		// the CLI's own session. Callers only ever test this for emptiness to
 		// decide whether the provider is configured, so the answer is the
@@ -211,6 +213,8 @@ func (c *Config) TextModel(provider string) string {
 		return c.CodexCLIModel
 	case qwenCLIProvider:
 		return c.QwenCLIModel
+	case mimoCLIProvider:
+		return c.MimoCLIModel
 	case OllamaLocalProvider, LMStudioProvider, CustomProvider, MimoProvider:
 		return c.endpointFor(c.resolveTextProvider(provider)).Model
 	default:

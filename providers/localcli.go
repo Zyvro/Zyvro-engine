@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -27,6 +29,7 @@ const (
 	claudeCLIProvider = "claude-cli"
 	codexCLIProvider  = "codex-cli"
 	qwenCLIProvider   = "qwen-cli"
+	mimoCLIProvider   = "mimo-cli"
 
 	// defaultLocalCLITimeout bounds one call. These CLIs are agents rather than
 	// a single completion, so a long run is normal and the cap is generous; it
@@ -50,6 +53,8 @@ func localCLIKind(provider string) string {
 		return codexCLIProvider
 	case qwenCLIProvider:
 		return qwenCLIProvider
+	case mimoCLIProvider:
+		return mimoCLIProvider
 	}
 	return ""
 }
@@ -70,6 +75,13 @@ func (c *Config) localCLIBinary(kind string) (bin, install string) {
 			bin = "qwen"
 		}
 		return bin, "npm install -g @qwen-code/qwen-code"
+	}
+	if kind == mimoCLIProvider {
+		bin = strings.TrimSpace(c.MimoCLIPath)
+		if bin == "" {
+			bin = "mimo"
+		}
+		return mimoCLIFallback(bin), mimoCLIInstall
 	}
 	bin = strings.TrimSpace(c.ClaudeCLIPath)
 	if bin == "" {
@@ -101,6 +113,9 @@ func (c *Config) localCLIModel(kind string) string {
 	}
 	if kind == qwenCLIProvider {
 		return strings.TrimSpace(c.QwenCLIModel)
+	}
+	if kind == mimoCLIProvider {
+		return strings.TrimSpace(c.MimoCLIModel)
 	}
 	return strings.TrimSpace(c.ClaudeCLIModel)
 }
@@ -160,6 +175,8 @@ func (c *Config) localCLIComplete(ctx context.Context, req LLMRequest, kind stri
 		return c.codexCLIComplete(ctx, system, prompt, model)
 	case qwenCLIProvider:
 		return c.qwenCLIComplete(ctx, system, prompt, model)
+	case mimoCLIProvider:
+		return c.mimoCLIComplete(ctx, system, prompt, model)
 	}
 	return c.claudeCLIComplete(ctx, system, prompt, model)
 }
@@ -502,6 +519,138 @@ func (c *Config) qwenCLIAim() (flags []string, env []string) {
 		"OPENAI_BASE_URL=" + url,
 		"OPENAI_API_KEY=" + key,
 	}
+}
+
+// ---------- mimo (MiMo Code) ----------
+
+// MiMo Code is Xiaomi's agent CLI, signed in to the person's MiMo account the
+// same way claude and codex are signed in to theirs. It is a fork of opencode,
+// and `mimo run --format json` prints opencode's events, one per line —
+// checked against the installed binary rather than assumed:
+//
+//	{"type":"step_start", …}
+//	{"type":"text","part":{"text":"OK", …}, …}
+//	{"type":"step_finish","part":{"tokens":{…},"cost":…}, …}
+//
+// and, for a run that cannot happen, `{"type":"error","error":{"data":
+// {"message":"Model not found: …"}}}` — **with exit status 0**. The stream, not
+// the exit code, says whether there is an answer.
+
+// mimoCLIInstall is MiMo Code's own installer. It is not on npm.
+const mimoCLIInstall = "curl -fsSL https://mimo.xiaomi.com/install | bash"
+
+// mimoCLIFallback finds MiMo Code where its installer puts it when it is not on
+// PATH: the installer adds ~/.mimocode/bin to PATH from .zshrc, which a process
+// launched from the Dock never reads.
+func mimoCLIFallback(bin string) string {
+	if bin != "mimo" {
+		return bin
+	}
+	if _, err := exec.LookPath(bin); err == nil {
+		return bin
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidate := filepath.Join(home, ".mimocode", "bin", "mimo")
+		if runtime.GOOS == "windows" {
+			candidate += ".exe"
+		}
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	return bin
+}
+
+type mimoCLIEvent struct {
+	Type string `json:"type"`
+	Part *struct {
+		Type      string `json:"type"`
+		Text      string `json:"text"`
+		MessageID string `json:"messageID"`
+	} `json:"part"`
+	Error *struct {
+		Name string `json:"name"`
+		Data *struct {
+			Message string `json:"message"`
+		} `json:"data"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+func (c *Config) mimoCLIComplete(ctx context.Context, system, prompt, model string) (*LLMResponse, error) {
+	// The `plan` agent is MiMo Code's read-only one: a text node answers, it
+	// does not edit the folder it runs in — the same posture as qwen's
+	// `--approval-mode plan` and `claude -p`'s default.
+	args := []string{"run", "--format", "json", "--agent", "plan"}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	// No system-prompt flag: the system block leads the prompt, on stdin.
+	stdin := prompt
+	if system != "" {
+		stdin = strings.TrimSpace(system + "\n\n" + prompt)
+	}
+
+	stdout, runErr := c.runLocalCLI(ctx, mimoCLIProvider, args, stdin)
+	answer, failure, parsed := parseMimoCLI(stdout)
+	if failure != "" {
+		return nil, &ProviderError{
+			Code:    "cli_error",
+			Message: fmt.Sprintf("%s: %s", mimoCLIProvider, truncate(failure, localCLIStderrCap)),
+		}
+	}
+	if runErr != nil {
+		return nil, runErr
+	}
+	if !parsed {
+		return &LLMResponse{Content: strings.TrimSpace(stdout)}, nil
+	}
+	return &LLMResponse{Content: answer}, nil
+}
+
+// parseMimoCLI reads the event stream. The answer is the text of the last
+// message that said anything: a run that thinks in several steps narrates each
+// of them, and the node asked for the last word, not the commentary.
+func parseMimoCLI(stdout string) (answer, failure string, parsed bool) {
+	var lastID string
+	var texts []string
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var ev mimoCLIEvent
+		if json.Unmarshal([]byte(line), &ev) != nil || ev.Type == "" {
+			continue
+		}
+		parsed = true
+		switch ev.Type {
+		case "error":
+			if ev.Error != nil {
+				switch {
+				case ev.Error.Data != nil && strings.TrimSpace(ev.Error.Data.Message) != "":
+					failure = strings.TrimSpace(ev.Error.Data.Message)
+				case strings.TrimSpace(ev.Error.Message) != "":
+					failure = strings.TrimSpace(ev.Error.Message)
+				default:
+					failure = strings.TrimSpace(ev.Error.Name)
+				}
+			}
+			if failure == "" {
+				failure = "MiMo Code reported an error"
+			}
+		case "text":
+			if ev.Part == nil || strings.TrimSpace(ev.Part.Text) == "" {
+				continue
+			}
+			if ev.Part.MessageID != lastID {
+				lastID = ev.Part.MessageID
+				texts = nil
+			}
+			texts = append(texts, ev.Part.Text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(texts, "")), failure, parsed
 }
 
 // ---------- process ----------
